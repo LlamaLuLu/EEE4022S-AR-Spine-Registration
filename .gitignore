@@ -179,3 +179,16 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Project data (not tracked, too large and licensed separately)
+data/
+previews/
+*.nii.gz
+*.nii
+*.dcm
+
+# Mac
+.DS_Store
+
+# VS Code
+.vscode/
