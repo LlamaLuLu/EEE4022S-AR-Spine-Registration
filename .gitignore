@@ -192,3 +192,6 @@ previews/
 
 # VS Code
 .vscode/
+
+# Blender autosave
+*.blend1
