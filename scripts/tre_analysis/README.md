@@ -5,6 +5,9 @@ layouts before physical construction. Predicts Target Registration Error
 (TRE) at each pedicle target for a set of candidate marker layouts, so
 only the winning layout gets 3D printed.
 
+All commands below are run from the **repo root**, not from
+`scripts/tre_analysis/`.
+
 ## Motivation
 
 Sachin Daya's 2025 cranial pipeline used arbitrarily-placed markers on
@@ -18,16 +21,19 @@ minimises predicted TRE at the 10 lumbar pedicle targets.
 
 ```
 scripts/tre_analysis/
-├── fitzpatrick_tre.py     Closed-form TRE predictor (Fitzpatrick 1998 eq 46)
-├── design_variants.py     Marker layouts for V0-V3, pedicle target loader
-├── measure_fle.py         Empirical fiducial localisation error measurement
-├── evaluate_designs.py    Runs Fitzpatrick across variants, produces table
-└── monte_carlo_tre.py     Simulates real PnP with noisy corners, empirical TRE
+├── fitzpatrick_tre.py           Closed-form TRE predictor (Fitzpatrick 1998 eq 46)
+├── design_variants.py           Marker centroid layouts for V0-V3, pedicle target loader
+├── design_variants_oriented.py  Same variants with per-marker orientation (used by MC)
+├── evaluate_designs.py          Runs Fitzpatrick across variants, produces predictions_table.csv
+├── monte_carlo_tre.py           Simulates real PnP with noisy corners, produces monte_carlo_table.csv
+├── measure_fle.py               Empirical FLE and pixel noise from static-board frames
+├── generate_fle_board.py        Prints 20mm ArUco board for FLE capture (pending)
+└── capture_fle_frames.py        Captures 100 static frames from IP Webcam (pending)
 ```
 
-Fitzpatrick and design_variants are library modules imported by the
-harnesses. measure_fle, evaluate_designs, and monte_carlo_tre are
-runnable scripts.
+`fitzpatrick_tre.py`, `design_variants.py`, and `design_variants_oriented.py`
+are library modules imported by the harnesses. Everything else is
+runnable.
 
 ## Design variants
 
@@ -65,13 +71,13 @@ coordinates, transform before loading.
 ## Pipeline flow
 
 ```
-camera_calibration.npz  →  measure_fle.py       →  FLE (mm)  ─┐
-pedicle_targets.json    →  design_variants.py   →  targets   ─┤
-                                                              ├→ evaluate_designs.py → predictions_table.csv → design decision
-                                      fitzpatrick_tre.py     ─┘
+camera_calibration.npz  →  measure_fle.py       →  FLE (mm) + pixel sigma  ─┐
+pedicle_targets.json    →  design_variants.py   →  targets                 ─┤
+                                                                            ├→ evaluate_designs.py → predictions_table.csv → design decision
+                                       fitzpatrick_tre.py                  ─┘
 
-                                                              ├→ monte_carlo_tre.py → monte_carlo_table.csv → validation
-camera_calibration.npz (K matrix) ────────────────────────────┘
+                                                                            ├→ monte_carlo_tre.py → monte_carlo_table.csv → validation
+camera_calibration.npz (K matrix)  ─────────────────────────────────────────┘
 ```
 
 evaluate_designs.py is the primary path to a decision. monte_carlo_tre.py
@@ -79,20 +85,24 @@ validates that the Fitzpatrick ranking survives real PnP behaviour.
 
 ## Usage
 
-Measure FLE first (once per camera setup):
+All commands run from the repo root.
+
+Measure FLE (once per camera setup, once physical capture exists):
 ```bash
 python scripts/tre_analysis/measure_fle.py \
     --imagedir data/fle_measurement/s22_ultra/ \
     --calibration data/calibration/s22_ultra/camera_calibration.npz \
     --marker-size-mm 20 \
-    --dictionary 6X6_50
+    --dictionary 6X6_50 \
+    --outfile results/tre_analysis/fle_measurement.json
 ```
 
 Predict TRE across all variants:
 ```bash
 python scripts/tre_analysis/evaluate_designs.py \
     --fle 0.35 \
-    --pedicles annotations/pedicle_targets_phantom_frame.json
+    --pedicles annotations/pedicle_targets_phantom_frame.json \
+    --outdir results/tre_analysis
 ```
 
 Validate with Monte Carlo:
@@ -102,10 +112,42 @@ python scripts/tre_analysis/monte_carlo_tre.py \
     --marker-size-mm 20 \
     --pixel-noise-sigma 0.3 \
     --n-trials 10000 \
-    --pedicles annotations/pedicle_targets_phantom_frame.json
+    --pedicles annotations/pedicle_targets_phantom_frame.json \
+    --outfile results/tre_analysis/monte_carlo_table.csv
 ```
 
-All three write CSVs to results/tre_analysis/ by default.
+Placeholder FLE (0.35mm) and pixel noise (0.3px) can be used before real
+values are measured; only relative rankings between variants are
+trustworthy in that case.
+
+## Quick usage via Makefile
+
+From the repo root:
+
+```bash
+make help              # list all available targets
+make measure-fle       # empirical FLE from captures
+make evaluate          # Fitzpatrick predictions
+make monte-carlo       # PnP validation
+make analyse           # both analyses back to back
+```
+
+See the Makefile for parameter overrides.
+
+## Path handling
+
+Scripts don't hardcode any paths. Every input and output is set through
+CLI flags with sensible defaults that assume repo-root execution:
+
+| Default | Used by |
+|---|---|
+| `data/calibration/s22_ultra/camera_calibration.npz` | measure_fle, monte_carlo_tre |
+| `data/fle_measurement/s22_ultra/` | measure_fle |
+| `annotations/pedicle_targets_phantom_frame.json` | evaluate_designs, monte_carlo_tre |
+| `results/tre_analysis/` | all output files |
+
+If run from `scripts/tre_analysis/` directly, pass explicit paths with
+`../../` prefixes. Recommended: alias in shell or add a wrapper.
 
 ## Assumptions and caveats
 
@@ -125,11 +167,10 @@ on near-coplanar boards). Monte Carlo simulation uses the actual
 cv2.solvePnP call and captures these effects. Where the two predictions
 disagree, Monte Carlo takes precedence for the design decision.
 
-Monte Carlo currently assumes all markers have their face parallel to
-the phantom XY plane. This is correct for V0 (base plate markers) but a
-simplification for V1-V3 (L-bracket markers with two different face
-orientations). Fine for validation of Fitzpatrick ranking, would need
-per-marker orientation matrices for absolute magnitude claims.
+Monte Carlo uses per-marker orientation matrices (design_variants_oriented.py)
+so V1-V3 markers on the L-bracket faces are correctly placed in 3D. Earlier
+versions of this script assumed all markers were parallel to the phantom XY
+plane, which underestimated the L-bracket's PnP advantage.
 
 FLE is measured at one working distance under one lighting condition.
 Real operating conditions will vary. Chapter 3 methodology should note
@@ -139,7 +180,7 @@ this and optionally include FLE at 25cm and 50cm for range reporting.
 
 ```
 results/tre_analysis/
-├── fle_measurement.json       Per-marker and aggregate FLE
+├── fle_measurement.json       Per-marker and aggregate FLE + pixel noise
 ├── predictions_table.csv      Fitzpatrick TRE per variant per target
 └── monte_carlo_table.csv      Monte Carlo TRE per variant per target
 ```
@@ -148,6 +189,9 @@ results/tre_analysis/
 
 Python 3.10+, numpy, opencv-python (>= 5.0.0). No other external
 libraries required for the analysis itself.
+
+The pending capture pipeline (generate_fle_board.py, capture_fle_frames.py)
+will additionally require Pillow for print generation.
 
 ## References
 
