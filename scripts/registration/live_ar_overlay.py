@@ -37,7 +37,8 @@ from ar_tre import compute_tre_scalar, DEFAULT_FLE_MM
 from ar_targets import load_targets
 from ar_overlay import (
     TextRenderer, draw_targets, draw_trajectories,
-    draw_wireframe, draw_hud, is_in_envelope,
+    draw_wireframe, draw_hud, draw_axis_triad, draw_target_radar,
+    is_in_envelope,
 )
 from ar_stl import load_stl_for_wireframe
 
@@ -107,8 +108,25 @@ def main():
     prev_rvec = prev_tvec = None
     last_good_time = verify_start_time = 0.0
     show_traj = show_ellipses = show_wire = show_hud = True
-    show_help = detach = False
+    show_triad = show_radar = True
+    show_help = True
+    detach = False
     tr = None  # TextRenderer, initialised on first frame
+
+    # Create a resizable window so the frame fills it (no grey padding)
+    WINDOW_NAME = "AR Spine Navigation"
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN,
+                          cv2.WINDOW_FULLSCREEN)
+
+    # Detect screen size for frame resize (eliminates grey letterbox)
+    screen_w, screen_h = 0, 0
+    try:
+        rect = cv2.getWindowImageRect(WINDOW_NAME)
+        if rect[2] > 0 and rect[3] > 0:
+            screen_w, screen_h = rect[2], rect[3]
+    except Exception:
+        pass
 
     print("Live AR overlay running. Press '?' for shortcuts, 'q' to quit.")
 
@@ -119,9 +137,23 @@ def main():
         if rotate_code is not None:
             frame = cv2.rotate(frame, rotate_code)
 
+        # Resize frame to fill the display (crop-to-fill, no letterbox)
+        if screen_w > 0 and screen_h > 0:
+            fh, fw = frame.shape[:2]
+            scale = max(screen_w / fw, screen_h / fh)
+            new_w, new_h = int(fw * scale), int(fh * scale)
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            # Centre-crop to exact screen size
+            y0 = (new_h - screen_h) // 2
+            x0 = (new_w - screen_w) // 2
+            frame = frame[y0:y0 + screen_h, x0:x0 + screen_w].copy()
+
         h, w = frame.shape[:2]
         if tr is None or tr.h != h:
             tr = TextRenderer(h, w)
+
+        # Begin buffered text overlay for this frame
+        tr.begin()
 
         now = time.time()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -198,14 +230,45 @@ def main():
         if show_hud:
             draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
                      distance_mm, elev_deg, az_deg, in_env,
-                     state, tre_values, target_labels, countdown, show_help)
+                     state, tre_values, target_labels, countdown,
+                     show_help, show_wire)
 
-        cv2.imshow("AR Spine Navigation", frame)
+        # --- Axis triad (LPS orientation gizmo, top-right below pose panel) ---
+        if show_triad and pnp_ok and state != "SEARCHING":
+            fh, fw = frame.shape[:2]
+            triad_size = int(fh * 0.05)
+            triad_cx = fw - int(fw * 0.11) - triad_size
+            triad_cy = int(fh * 0.24) + triad_size
+            draw_axis_triad(frame, tr, rvec, tvec, K, D,
+                            triad_cx, triad_cy, triad_size)
 
-        # --- Keys ---
+        # --- Target radar (right side below triad) ---
+        if show_radar and state == "NAVIGATING" and tre_values is not None:
+            fh, fw = frame.shape[:2]
+            radar_w = int(fw * 0.11)
+            radar_h = int(fh * 0.42)
+            radar_x = fw - int(fw * 0.015) - radar_w
+            radar_y = int(fh * 0.35)
+            draw_target_radar(frame, tr, tre_values, target_labels, in_env,
+                              radar_x, radar_y, radar_w, radar_h)
+
+        # Flush all buffered text onto the frame in one composite
+        tr.flush(frame)
+
+        cv2.imshow(WINDOW_NAME, frame)
+
+        # --- Keys + window close ---
         key = cv2.waitKey(1) & 0xFF
+        # Detect X button close (works on macOS, Linux, Windows)
+        try:
+            if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error:
+            break
         if key == ord("q"):
             break
+        elif key == 27:  # ESC: toggle help panel
+            show_help = not show_help
         elif key == ord("c") and state == "VERIFYING":
             state = "NAVIGATING"
             print("Registration confirmed (manual).")
@@ -222,8 +285,10 @@ def main():
             detach = not detach
         elif key == ord("h"):
             show_hud = not show_hud
-        elif key == ord("?"):
-            show_help = not show_help
+        elif key == ord("g"):
+            show_triad = not show_triad
+        elif key == ord("x"):
+            show_radar = not show_radar
 
     cap.release()
     cv2.destroyAllWindows()
