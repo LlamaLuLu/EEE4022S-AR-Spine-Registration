@@ -20,6 +20,7 @@ Usage (from repo root):
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -112,6 +113,10 @@ class ARWindow(QMainWindow):
             print(f"Could not open source: {args.source}")
             sys.exit(1)
 
+        # Minimize internal buffer: always grab the newest frame, not a
+        # stale one that was captured seconds ago over WiFi.
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
         self.detector = cv2.aruco.ArucoDetector(
             ARUCO_DICT, cv2.aruco.DetectorParameters()
         )
@@ -122,6 +127,10 @@ class ARWindow(QMainWindow):
         self.last_good_time = self.verify_start_time = 0.0
         self.show_traj = self.show_ellipses = self.show_wire = True
         self.detach = False
+
+        # --- Timing instrumentation ---
+        self._frame_count = 0
+        self._last_log = time.perf_counter()
 
         # --- Build UI ---
         self._build_ui()
@@ -220,13 +229,16 @@ class ARWindow(QMainWindow):
     # ================================================================
 
     def next_frame(self):
+        t0 = time.perf_counter()
+
         ok, frame = self.cap.read()
         if not ok:
             return
         if self.rotate_code is not None:
             frame = cv2.rotate(frame, self.rotate_code)
 
-        import time
+        t1 = time.perf_counter()
+
         now = time.time()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
@@ -284,6 +296,8 @@ class ARWindow(QMainWindow):
                 self.state = "NAVIGATING"
                 print("Registration confirmed (auto).")
 
+        t2 = time.perf_counter()
+
         # --- On-frame overlays (drawn onto numpy frame) ---
         doff = DETACH_OFFSET_PX if self.detach else 0
 
@@ -298,10 +312,6 @@ class ARWindow(QMainWindow):
                     draw_trajectories(frame, self.target_pts, self.traj_pairs,
                                       rvec, tvec, self.K, self.D, doff)
 
-                # NB: draw_targets expects a TextRenderer for labels; passing
-                # None temporarily until we route labels through Qt too.
-                # For now, skip target labels (draw crosshairs + ellipses only)
-                # by feeding a no-op text renderer.
                 _NoOpTR = type("_NR", (), {
                     "h": frame.shape[0], "w": frame.shape[1],
                     "text": lambda self, *a, **k: None,
@@ -311,6 +321,8 @@ class ARWindow(QMainWindow):
                              tre_values, rvec, tvec, self.K, self.D,
                              visible_ids, self.corner_lut, self.args.fle,
                              in_env, _NoOpTR, self.show_ellipses, doff)
+
+        t3 = time.perf_counter()
 
         # --- Update Qt widgets (only if values changed) ---
         self.status_panel.update_values(n_markers, pnp_ok, reproj_rms)
@@ -355,6 +367,21 @@ class ARWindow(QMainWindow):
 
         # --- Push frame to video label ---
         self._show_frame(frame)
+
+        t4 = time.perf_counter()
+
+        # --- Log timing once per second ---
+        self._frame_count += 1
+        elapsed = t4 - self._last_log
+        if elapsed >= 1.0:
+            fps = self._frame_count / elapsed
+            print(f"grab={((t1-t0)*1000):.0f}ms  "
+                  f"detect+pnp={((t2-t1)*1000):.0f}ms  "
+                  f"overlay={((t3-t2)*1000):.0f}ms  "
+                  f"qt={((t4-t3)*1000):.0f}ms  "
+                  f"FPS={fps:.1f}")
+            self._frame_count = 0
+            self._last_log = t4
 
     def _show_frame(self, frame_bgr):
         """Convert BGR numpy frame to QPixmap and set on the video label."""
