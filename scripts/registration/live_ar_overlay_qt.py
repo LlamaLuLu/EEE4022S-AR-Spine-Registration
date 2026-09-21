@@ -21,6 +21,7 @@ Usage (from repo root):
 import argparse
 import sys
 import time
+import threading
 from pathlib import Path
 
 import cv2
@@ -68,6 +69,37 @@ def open_source(source):
         return cv2.VideoCapture(source)
 
 
+class FrameGrabber:
+    """Background thread that continuously grabs frames, keeping only the
+    latest. The main loop calls read() and always gets the freshest frame
+    instead of a stale one from FFmpeg's internal buffer."""
+
+    def __init__(self, cap):
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.frame = None
+        self.ok = False
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while self._running:
+            ok, frame = self.cap.read()
+            with self.lock:
+                self.ok = ok
+                self.frame = frame
+
+    def read(self):
+        with self.lock:
+            return self.ok, self.frame
+
+    def release(self):
+        self._running = False
+        self._thread.join(timeout=1.0)
+        self.cap.release()
+
+
 # ====================================================================
 # Main window
 # ====================================================================
@@ -99,23 +131,75 @@ class ARWindow(QMainWindow):
               f"trajectory pairs: {len(self.traj_pairs)}")
 
         # --- Wireframe ---
-        self.mesh_verts, self.mesh_edges = None, None
+        self.mesh_verts = None
+        self.mesh_edge_i0 = self.mesh_edge_i1 = self.mesh_edge_normals = None
         if args.stl:
-            self.mesh_verts, self.mesh_edges = load_stl_for_wireframe(args.stl)
-            if self.mesh_verts is not None:
-                print(f"STL wireframe: {len(self.mesh_verts)} verts, "
-                      f"{len(self.mesh_edges)} edges")
+            verts, edges = load_stl_for_wireframe(args.stl)
+            if verts is not None:
+                # Apply scale (Blender metres → mm) and offset
+                verts_mm = (verts * args.stl_scale
+                            + np.array(args.stl_offset, dtype=np.float32))
+
+                # Runtime decimation: merge vertices within grid_mm of
+                # each other, which collapses small triangles and reduces
+                # edge count. grid=1mm keeps fine detail; grid=3-4mm gives
+                # a recognisable shape at much higher FPS.
+                grid = args.stl_decimate
+                if grid > 0:
+                    rounded = np.round(verts_mm / grid) * grid
+                    unique, inverse = np.unique(
+                        rounded.astype(np.float32), axis=0, return_inverse=True)
+
+                    # Rebuild edges with merged indices, drop degenerate edges
+                    i0_raw = np.array([e[0] for e in edges], dtype=np.int32)
+                    i1_raw = np.array([e[1] for e in edges], dtype=np.int32)
+                    normals_raw = np.array([e[2] for e in edges], dtype=np.float32)
+
+                    new_i0 = inverse[i0_raw]
+                    new_i1 = inverse[i1_raw]
+                    valid = new_i0 != new_i1  # drop collapsed edges
+
+                    # Deduplicate edges
+                    edge_keys = np.stack([np.minimum(new_i0[valid], new_i1[valid]),
+                                         np.maximum(new_i0[valid], new_i1[valid])], axis=1)
+                    _, unique_idx = np.unique(edge_keys, axis=0, return_index=True)
+
+                    self.mesh_verts = unique
+                    self.mesh_edge_i0 = new_i0[valid][unique_idx]
+                    self.mesh_edge_i1 = new_i1[valid][unique_idx]
+                    self.mesh_edge_normals = normals_raw[valid][unique_idx]
+
+                    print(f"STL decimated: {len(unique)} verts, "
+                          f"{len(unique_idx)} edges (grid={grid}mm)")
+                else:
+                    self.mesh_verts = verts_mm
+                    self.mesh_edge_i0 = np.array([e[0] for e in edges], dtype=np.int32)
+                    self.mesh_edge_i1 = np.array([e[1] for e in edges], dtype=np.int32)
+                    self.mesh_edge_normals = np.array([e[2] for e in edges], dtype=np.float32)
+
+                print(f"  STL bounds (after transform): "
+                      f"min={self.mesh_verts.min(axis=0).round(1)} "
+                      f"max={self.mesh_verts.max(axis=0).round(1)}")
+
+        # Debug: print marker centroid bounds for comparison with STL
+        centroids = np.array([v.mean(axis=0) for v in self.corner_lut.values()])
+        print(f"Marker centroid bounds: min={centroids.min(axis=0).round(1)} "
+              f"max={centroids.max(axis=0).round(1)}")
+        print(f"Target bounds: min={self.target_pts.min(axis=0).round(1)} "
+              f"max={self.target_pts.max(axis=0).round(1)}")
 
         # --- Video ---
         self.rotate_code = ROTATE_MAP[args.rotate]
-        self.cap = open_source(args.source)
-        if not self.cap.isOpened():
+        cap = open_source(args.source)
+        if not cap.isOpened():
             print(f"Could not open source: {args.source}")
             sys.exit(1)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        # Minimize internal buffer: always grab the newest frame, not a
-        # stale one that was captured seconds ago over WiFi.
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # Threaded grabber: continuously reads frames in background,
+        # so the main loop always gets the freshest frame instead of
+        # a stale one from FFmpeg's internal buffer.
+        self.grabber = FrameGrabber(cap)
 
         self.detector = cv2.aruco.ArucoDetector(
             ARUCO_DICT, cv2.aruco.DetectorParameters()
@@ -231,8 +315,8 @@ class ARWindow(QMainWindow):
     def next_frame(self):
         t0 = time.perf_counter()
 
-        ok, frame = self.cap.read()
-        if not ok:
+        ok, frame = self.grabber.read()
+        if not ok or frame is None:
             return
         if self.rotate_code is not None:
             frame = cv2.rotate(frame, self.rotate_code)
@@ -262,17 +346,43 @@ class ARWindow(QMainWindow):
                 self.prev_rvec, self.prev_tvec,
             )
             if pnp_ok:
-                self.prev_rvec, self.prev_tvec = rvec.copy(), tvec.copy()
-                self.last_good_time = now
                 cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                in_env = is_in_envelope(elev_deg, az_deg)
                 visible_ids = [m for m in ids.flatten() if m in self.corner_lut]
-                tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
-                                                self.target_pts, self.args.fle)
 
-                if self.state in ("SEARCHING", "STALE"):
-                    self.state = "VERIFYING"
-                    self.verify_start_time = now
+                # Reject mirrored PnP solution (planar ambiguity).
+                # The mirror places the camera hundreds of mm on the wrong
+                # side. Use generous margins (100mm) to allow oblique views.
+                face_a_only = all(m < 4 for m in visible_ids)
+                face_b_only = all(m >= 4 for m in visible_ids)
+
+                if face_a_only and cam_pos[2] > -103.7 + 100:
+                    pnp_ok = False  # camera way too cranial for Face A
+                elif face_b_only and cam_pos[0] < 70.1 - 100:
+                    pnp_ok = False  # camera way too medial for Face B
+
+                # Per-marker reprojection error (debug: find geometry mismatches)
+                if pnp_ok and reproj_rms > 5.0:
+                    for mid, c2d in zip(ids.flatten(), corners):
+                        if mid in self.corner_lut:
+                            obj = self.corner_lut[mid]
+                            rep, _ = cv2.projectPoints(
+                                obj, rvec, tvec, self.K, self.D)
+                            err = np.linalg.norm(
+                                rep.reshape(4, 2) - c2d.reshape(4, 2), axis=1)
+                            print(f"  ID {mid}: reproj err = "
+                                  f"{err.mean():.1f}px (corners: "
+                                  f"{err.round(1).tolist()})")
+
+                if pnp_ok:
+                    self.prev_rvec, self.prev_tvec = rvec.copy(), tvec.copy()
+                    self.last_good_time = now
+                    in_env = is_in_envelope(elev_deg, az_deg)
+                    tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
+                                                    self.target_pts, self.args.fle)
+
+                    if self.state in ("SEARCHING", "STALE"):
+                        self.state = "VERIFYING"
+                        self.verify_start_time = now
 
         # --- Stale / lost ---
         if not pnp_ok:
@@ -304,7 +414,9 @@ class ARWindow(QMainWindow):
         if self.state in ("VERIFYING", "NAVIGATING", "STALE"):
             if (self.show_wire and self.mesh_verts is not None
                     and self.state != "STALE"):
-                draw_wireframe(frame, self.mesh_verts, self.mesh_edges,
+                draw_wireframe(frame, self.mesh_verts,
+                               self.mesh_edge_i0, self.mesh_edge_i1,
+                               self.mesh_edge_normals,
                                rvec, tvec, self.K, self.D, cam_pos)
 
             if self.state == "NAVIGATING" and tre_values is not None:
@@ -442,7 +554,7 @@ class ARWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
-        self.cap.release()
+        self.grabber.release()
         super().closeEvent(event)
 
 
@@ -458,6 +570,14 @@ def main():
     ap.add_argument("--isthmus", default=None)
     ap.add_argument("--entry", default=None)
     ap.add_argument("--stl", default=None)
+    ap.add_argument("--stl-scale", type=float, default=1000.0,
+                    help="STL scale factor (default 1000: Blender metres → mm)")
+    ap.add_argument("--stl-offset", type=float, nargs=3, default=[0, 0, 0],
+                    metavar=("X", "Y", "Z"),
+                    help="Translation after scaling (mm, phantom LPS frame)")
+    ap.add_argument("--stl-decimate", type=float, default=1.0,
+                    help="Vertex merge grid in mm (default 1.0; try 2-4 for"
+                         " faster rendering on dense meshes)")
     ap.add_argument("--marker-map", default=None)
     ap.add_argument("--fle", type=float, default=DEFAULT_FLE_MM)
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])

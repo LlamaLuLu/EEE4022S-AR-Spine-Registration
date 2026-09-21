@@ -175,17 +175,46 @@ def draw_trajectories(frame, targets_mm, pairs, rvec, tvec, K, D, doff=0):
         cv2.line(frame, p1, p2, ACCENT, 1, cv2.LINE_AA)
 
 
-def draw_wireframe(frame, verts, edges, rvec, tvec, K, D, cam_pos):
-    if verts is None:
+def draw_wireframe(frame, verts, edge_i0, edge_i1, edge_normals,
+                   rvec, tvec, K, D, cam_pos,
+                   fill_alpha=0.45, fill_colour=ACCENT_DIM):
+    """
+    Semi-transparent mesh overlay using batch polylines.
+
+    Accepts pre-computed numpy arrays for edges (built once at load time).
+    Projects all vertices, vectorized backface cull, draws visible edges
+    onto an overlay and alpha-blends onto the frame.
+    """
+    if verts is None or edge_i0 is None:
         return
+
+    # Project all vertices in one call
     pts, _ = cv2.projectPoints(verts.astype(np.float64), rvec, tvec, K, D)
     pts = pts.reshape(-1, 2).astype(np.int32)
-    for i0, i1, n in edges:
-        mid = (verts[i0] + verts[i1]) / 2.0
-        if np.dot(n, cam_pos - mid) < 0:
-            continue
-        cv2.line(frame, tuple(pts[i0]), tuple(pts[i1]),
-                 ACCENT_DIM, 1, cv2.LINE_AA)
+
+    # Vectorized backface cull
+    mids = (verts[edge_i0] + verts[edge_i1]) * 0.5
+    to_cam = cam_pos - mids
+    dots = np.sum(edge_normals * to_cam, axis=1)
+    visible = dots > 0
+
+    p0s = pts[edge_i0[visible]]
+    p1s = pts[edge_i1[visible]]
+
+    if len(p0s) == 0:
+        return
+
+    # Draw visible edges onto a blank overlay, then alpha-blend
+    overlay = np.zeros_like(frame)
+    segments = np.stack([p0s, p1s], axis=1)  # (N, 2, 2)
+    cv2.polylines(overlay, segments, isClosed=False,
+                  color=fill_colour, thickness=1, lineType=cv2.LINE_4)
+
+    # Alpha-blend only where overlay has content
+    mask = overlay.any(axis=2)
+    blended = cv2.addWeighted(frame, 1.0 - fill_alpha,
+                              overlay, fill_alpha, 0)
+    frame[mask] = blended[mask]
 
 
 # ====================================================================

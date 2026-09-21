@@ -69,6 +69,128 @@ def make_marker(aruco_id, size_px):
     return cv2.aruco.generateImageMarker(ARUCO_DICT, aruco_id, size_px)
 
 
+def compose_face_block(face_label, face_slots, start_id, marker_size_mm,
+                       face_size_mm=79.0):
+    """
+    Compose a single face-sized block (face_size_mm x face_size_mm) with
+    all 4 markers pre-positioned at their exact face_local coordinates.
+
+    Print this, cut the outer edge, and stick the whole block on the
+    bracket face. Zero individual marker placement error.
+    """
+    block_px = mm(face_size_mm)
+    marker_px = mm(marker_size_mm)
+    half_m = marker_size_mm / 2.0
+
+    block = Image.new("L", (block_px, block_px), 255)
+    draw = ImageDraw.Draw(block)
+
+    # Thin dashed border for cutting guide
+    dash, gap = mm(2.0), mm(1.5)
+    stroke = max(1, mm(0.2))
+    for x0, y0, x1, y1 in [
+        (0, 0, block_px - 1, 0),
+        (0, block_px - 1, block_px - 1, block_px - 1),
+        (0, 0, 0, block_px - 1),
+        (block_px - 1, 0, block_px - 1, block_px - 1),
+    ]:
+        _draw_dashed_line(draw, x0, y0, x1, y1, dash, gap)
+
+    # Corner marks (small L-shapes for precise cutting)
+    mark_len = mm(5)
+    for cx, cy in [(0, 0), (block_px-1, 0), (0, block_px-1), (block_px-1, block_px-1)]:
+        dx = 1 if cx == 0 else -1
+        dy = 1 if cy == 0 else -1
+        draw.line([(cx, cy), (cx + dx * mark_len, cy)], fill=0, width=stroke)
+        draw.line([(cx, cy), (cx, cy + dy * mark_len)], fill=0, width=stroke)
+
+    font_id = get_font(2.5)
+    font_title = get_font(3.0)
+
+    for slot_info in face_slots:
+        aruco_id = start_id + slot_info["slot"]
+
+        # Parse face_local "(h, v)" string to get centre position in mm
+        local_str = slot_info["face_local"].strip("()")
+        h_mm, v_mm = [float(x.strip()) for x in local_str.split(",")]
+
+        # Convert to pixel position (top-left of marker)
+        mx = mm(h_mm - half_m)
+        my = mm(v_mm - half_m)
+
+        # Generate and paste marker
+        marker_img = make_marker(aruco_id, marker_px)
+        block.paste(Image.fromarray(marker_img), (mx, my))
+
+        # Small ID label below the marker
+        label_x = mm(h_mm - half_m)
+        label_y = mm(v_mm + half_m + 0.5)
+        draw.text((label_x, label_y), f"ID {aruco_id}",
+                  fill=150, font=font_id)
+
+    # Face title at the very top centre
+    draw.text((mm(face_size_mm * 0.25), mm(1.5)),
+              f"Face {face_label}", fill=100, font=font_title)
+
+    return block
+
+
+def compose_face_blocks_pdf(marker_size_mm, start_id, face_size_mm=79.0):
+    """
+    A4 PDF with both face blocks printed at exact physical size,
+    plus a 50mm ruler for print-scale verification.
+    """
+    page_w, page_h = mm(210), mm(297)
+    page = Image.new("L", (page_w, page_h), 255)
+    draw = ImageDraw.Draw(page)
+
+    font_title = get_font(5.0)
+    font_note = get_font(3.0)
+
+    # Title
+    draw.text((mm(15), mm(10)),
+              "V3 L-bracket face blocks (DICT_6X6_50, 20mm markers)",
+              fill=0, font=font_title)
+    draw.text((mm(15), mm(18)),
+              f"Print at 100% scale | Cut outer edge | Stick whole block on face",
+              fill=0, font=font_note)
+
+    face_a_slots = [s for s in SLOT_INFO if s["face"] == "A"]
+    face_b_slots = [s for s in SLOT_INFO if s["face"] == "B"]
+
+    block_a = compose_face_block("A (caudal wall)", face_a_slots,
+                                  start_id, marker_size_mm, face_size_mm)
+    block_b = compose_face_block("B (lateral wall)", face_b_slots,
+                                  start_id, marker_size_mm, face_size_mm)
+
+    # Place both blocks on the page, centred horizontally, stacked vertically
+    block_px = mm(face_size_mm)
+    gap_mm = 15.0
+    total_h = face_size_mm * 2 + gap_mm
+    top_margin = (297 - total_h) / 2 + 10  # offset down a bit for the title
+    left_margin = (210 - face_size_mm) / 2
+
+    page.paste(block_a, (mm(left_margin), mm(top_margin)))
+
+    label_a_y = mm(top_margin + face_size_mm + 2)
+    draw.text((mm(left_margin), label_a_y),
+              f"Face A: stick on caudal wall (Z = -95)",
+              fill=0, font=font_note)
+
+    block_b_y = mm(top_margin + face_size_mm + gap_mm)
+    page.paste(block_b, (mm(left_margin), block_b_y))
+
+    label_b_y = block_b_y + block_px + mm(2)
+    draw.text((mm(left_margin), label_b_y),
+              f"Face B: stick on lateral wall (X = +30)",
+              fill=0, font=font_note)
+
+    # 50mm ruler at the bottom
+    _draw_ruler(draw, page_h, get_font(2.5), font_note)
+
+    return page
+
+
 def compose_print_sheet(marker_size_mm, start_id):
     """
     A4 PDF with all 8 markers at true print size, arranged in a table
@@ -246,11 +368,17 @@ def main():
             "face_local_hv": slot["face_local"],
         })
 
-    # A4 print-ready PDF
+    # A4 print-ready PDF (individual markers in a grid)
     pdf_sheet = compose_print_sheet(args.marker_size_mm, args.start_id)
     pdf_path = outdir / "bracket_markers.pdf"
     pdf_sheet.save(str(pdf_path), resolution=DPI)
-    print(f"\nPrint-ready PDF: {pdf_path}")
+    print(f"\nIndividual markers PDF: {pdf_path}")
+
+    # A4 face blocks PDF (whole face, stick-and-go)
+    face_pdf = compose_face_blocks_pdf(args.marker_size_mm, args.start_id)
+    face_path = outdir / "bracket_face_blocks.pdf"
+    face_pdf.save(str(face_path), resolution=DPI)
+    print(f"Face blocks PDF: {face_path}")
 
     # Mapping JSON
     map_path = outdir / "marker_map.json"
@@ -259,10 +387,11 @@ def main():
 
     print(f"Marker map: {map_path}")
     print(f"\nNext steps:")
-    print(f"  1. Print {pdf_path.name} at 100% scale (NOT 'fit to page')")
+    print(f"  1. Print {face_path.name} at 100% scale (NOT 'fit to page')")
     print(f"  2. Measure the 50mm ruler to confirm scale")
-    print(f"  3. Cut along dashed lines, stick on bracket at labelled positions")
-    print(f"  4. Pass --marker-map {map_path} to live_ar_overlay.py")
+    print(f"  3. Cut each face block along the outer dashed edge")
+    print(f"  4. Stick Face A block on the caudal wall, Face B on the lateral wall")
+    print(f"  5. Pass --marker-map {map_path} to live_ar_overlay_qt.py")
 
 
 if __name__ == "__main__":
