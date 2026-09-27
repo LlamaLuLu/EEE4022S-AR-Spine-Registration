@@ -389,6 +389,7 @@ class ShortcutsPanel(QFrame):
         ("x", "target radar"),
         ("h", "toggle hud"),
         ("f", "fullscreen"),
+        ("s", "screenshot"),
         ("esc", "toggle help"),
         ("q", "quit"),
     ]

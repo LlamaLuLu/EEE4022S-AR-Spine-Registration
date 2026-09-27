@@ -216,6 +216,30 @@ class ARWindow(QMainWindow):
         self._frame_count = 0
         self._last_log = time.perf_counter()
 
+        # --- CSV data logger (for ATP tests) ---
+        self._csv_file = None
+        self._csv_writer = None
+        if args.log:
+            import csv
+            self._csv_file = open(args.log, "w", newline="")
+            self._csv_writer = csv.writer(self._csv_file)
+            # Header
+            tre_headers = [f"TRE_{l}" for l in self.target_labels]
+            self._csv_writer.writerow([
+                "timestamp", "state", "n_markers", "pnp_ok", "rms_px",
+                "distance_mm", "elevation_deg", "azimuth_deg",
+                "cam_x", "cam_y", "cam_z", "in_envelope",
+                "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
+                "visible_ids",
+            ] + tre_headers)
+            print(f"Logging to: {args.log}")
+
+        # --- Screenshot ---
+        self._screenshot_dir = Path(args.screenshot_dir)
+        self._screenshot_dir.mkdir(parents=True, exist_ok=True)
+        self._screenshot_count = 0
+        self._last_frame_bgr = None
+
         # --- Build UI ---
         self._build_ui()
 
@@ -478,6 +502,7 @@ class ARWindow(QMainWindow):
                              max(int(self.height() * 0.02), 12))
 
         # --- Push frame to video label ---
+        self._last_frame_bgr = frame.copy()
         self._show_frame(frame)
 
         t4 = time.perf_counter()
@@ -495,6 +520,25 @@ class ARWindow(QMainWindow):
             self._frame_count = 0
             self._last_log = t4
 
+        # --- CSV data log (every frame) ---
+        if self._csv_writer is not None:
+            tre_vals = []
+            if tre_values is not None:
+                tre_vals = [f"{v:.3f}" for v in tre_values]
+            else:
+                tre_vals = [""] * len(self.target_labels)
+            self._csv_writer.writerow([
+                f"{now:.3f}", self.state, n_markers, pnp_ok,
+                f"{reproj_rms:.2f}" if not np.isnan(reproj_rms) else "",
+                f"{distance_mm:.1f}", f"{elev_deg:.1f}", f"{az_deg:.1f}",
+                f"{cam_pos[0]:.1f}", f"{cam_pos[1]:.1f}", f"{cam_pos[2]:.1f}",
+                in_env,
+                f"{(t1-t0)*1000:.1f}", f"{(t2-t1)*1000:.1f}",
+                f"{(t3-t2)*1000:.1f}", f"{(t4-t3)*1000:.1f}",
+                "|".join(str(i) for i in visible_ids),
+            ] + tre_vals)
+            self._csv_file.flush()
+
     def _show_frame(self, frame_bgr):
         """Convert BGR numpy frame to QPixmap and set on the video label."""
         h, w, _ = frame_bgr.shape
@@ -505,7 +549,7 @@ class ARWindow(QMainWindow):
         # Scale to fill the label preserving aspect
         pix = pix.scaled(self.video_label.size(),
                          Qt.KeepAspectRatioByExpanding,
-                         Qt.SmoothTransformation)
+                         Qt.FastTransformation)
         self.video_label.setPixmap(pix)
 
     # ================================================================
@@ -551,10 +595,30 @@ class ARWindow(QMainWindow):
         elif text == "r":
             self.state = "SEARCHING"
             self.prev_rvec = self.prev_tvec = None
+        elif text == "s":
+            self._save_screenshot()
+
+    def _save_screenshot(self):
+        """Save raw frame (with on-frame overlays) and full window (with HUD)."""
+        if self._last_frame_bgr is None:
+            return
+        self._screenshot_count += 1
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        base = self._screenshot_dir / f"shot_{stamp}_{self._screenshot_count:03d}"
+        cv2.imwrite(f"{base}_frame.png", self._last_frame_bgr)
+        self.grab().save(f"{base}_window.png")
+        print(f"Screenshot saved: {base}_*.png")
+        if self._csv_writer is not None:
+            self._csv_writer.writerow([f"{time.time():.3f}", "SCREENSHOT",
+                                       base.name])
+            self._csv_file.flush()
 
     def closeEvent(self, event):
         self.timer.stop()
         self.grabber.release()
+        if self._csv_file is not None:
+            self._csv_file.close()
+            print(f"Log closed: {self.args.log}")
         super().closeEvent(event)
 
 
@@ -581,6 +645,10 @@ def main():
     ap.add_argument("--marker-map", default=None)
     ap.add_argument("--fle", type=float, default=DEFAULT_FLE_MM)
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])
+    ap.add_argument("--log", default=None,
+                    help="CSV file path for per-frame data logging (ATP tests)")
+    ap.add_argument("--screenshot-dir", default="data/screenshots",
+                    help="Directory for screenshots (press 's' to capture)")
     args = ap.parse_args()
 
     # HiDPI is on by default in Qt6, no explicit attributes needed.

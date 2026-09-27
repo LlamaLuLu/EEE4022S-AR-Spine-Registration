@@ -100,7 +100,7 @@ PLACEHOLDER_PEDICLE_LABELS = (
 
 # ---------- Pedicle loader ----------
 
-LPS_TO_PHANTOM_TRANSLATION_MM = np.array([-8.0, +155.0, +579.0])
+LPS_TO_PHANTOM_TRANSLATION_MM = np.array([-9.1, +177.7, +583.2])
 
 
 def load_pedicles_from_json(json_path: str | Path,

@@ -23,8 +23,8 @@ import cv2
 
 DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 SQUARES_X, SQUARES_Y = 5, 7
-SQUARE_LENGTH_M = 0.030
-MARKER_LENGTH_M = 0.015
+SQUARE_LENGTH_M = 0.029
+MARKER_LENGTH_M = 0.0145
 
 ROTATE_MAP = {
     0: None,
