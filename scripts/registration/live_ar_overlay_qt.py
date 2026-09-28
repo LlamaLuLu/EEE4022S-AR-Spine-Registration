@@ -209,6 +209,7 @@ class ARWindow(QMainWindow):
         self.state = "SEARCHING"
         self.prev_rvec = self.prev_tvec = None
         self.last_good_time = self.verify_start_time = 0.0
+        self._pre_stale_state = None   # state to resume after a brief dropout
         self.show_traj = self.show_ellipses = self.show_wire = True
         self.detach = False
 
@@ -239,6 +240,8 @@ class ARWindow(QMainWindow):
         self._screenshot_dir.mkdir(parents=True, exist_ok=True)
         self._screenshot_count = 0
         self._last_frame_bgr = None
+        self._last_clean_bgr = None
+        self._last_pose = None
 
         # --- Build UI ---
         self._build_ui()
@@ -344,6 +347,8 @@ class ARWindow(QMainWindow):
             return
         if self.rotate_code is not None:
             frame = cv2.rotate(frame, self.rotate_code)
+        # Clean copy (no overlays) for measurement screenshots
+        clean = frame.copy()
 
         t1 = time.perf_counter()
 
@@ -404,7 +409,12 @@ class ARWindow(QMainWindow):
                     tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
                                                     self.target_pts, self.args.fle)
 
-                    if self.state in ("SEARCHING", "STALE"):
+                    if self.state == "STALE":
+                        # Brief dropout recovered: resume where we were.
+                        # VERIFYING keeps its countdown, NAVIGATING stays put.
+                        self.state = self._pre_stale_state or "VERIFYING"
+                        self._pre_stale_state = None
+                    elif self.state == "SEARCHING":
                         self.state = "VERIFYING"
                         self.verify_start_time = now
 
@@ -412,7 +422,8 @@ class ARWindow(QMainWindow):
         if not pnp_ok:
             if (self.prev_rvec is not None and
                     (now - self.last_good_time) < STALE_HOLD_SEC):
-                if self.state != "SEARCHING":
+                if self.state not in ("SEARCHING", "STALE"):
+                    self._pre_stale_state = self.state
                     self.state = "STALE"
                 rvec, tvec = self.prev_rvec, self.prev_tvec
                 cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
@@ -421,6 +432,7 @@ class ARWindow(QMainWindow):
                                                 self.target_pts, self.args.fle)
             else:
                 self.state = "SEARCHING"
+                self._pre_stale_state = None
                 self.prev_rvec = self.prev_tvec = None
                 visible_ids = []
 
@@ -503,6 +515,22 @@ class ARWindow(QMainWindow):
 
         # --- Push frame to video label ---
         self._last_frame_bgr = frame.copy()
+        self._last_clean_bgr = clean
+        if rvec is not None:
+            self._last_pose = {
+                "rvec": np.asarray(rvec).ravel().tolist(),
+                "tvec": np.asarray(tvec).ravel().tolist(),
+                "state": self.state,
+                "pnp_ok": bool(pnp_ok),
+                "n_markers": int(n_markers),
+                "rms_px": None if np.isnan(reproj_rms) else float(reproj_rms),
+                "visible_ids": [int(i) for i in visible_ids],
+                "distance_mm": float(distance_mm),
+                "elevation_deg": float(elev_deg),
+                "azimuth_deg": float(az_deg),
+            }
+        else:
+            self._last_pose = None
         self._show_frame(frame)
 
         t4 = time.perf_counter()
@@ -606,6 +634,23 @@ class ARWindow(QMainWindow):
         stamp = time.strftime("%Y%m%d_%H%M%S")
         base = self._screenshot_dir / f"shot_{stamp}_{self._screenshot_count:03d}"
         cv2.imwrite(f"{base}_frame.png", self._last_frame_bgr)
+        if self._last_clean_bgr is not None:
+            cv2.imwrite(f"{base}_clean.png", self._last_clean_bgr)
+        if self._last_pose is not None:
+            import json
+            pose = dict(self._last_pose)
+            pose.update({
+                "timestamp": time.time(),
+                "camera_matrix": np.asarray(self.K).tolist(),
+                "dist_coeffs": np.asarray(self.D).ravel().tolist(),
+                "calib": str(self.args.calib),
+                "image_size": [int(self._last_clean_bgr.shape[1]),
+                               int(self._last_clean_bgr.shape[0])],
+            })
+            with open(f"{base}_pose.json", "w") as f:
+                json.dump(pose, f, indent=2)
+        else:
+            print("  (no valid pose, measurement data not saved)")
         self.grab().save(f"{base}_window.png")
         print(f"Screenshot saved: {base}_*.png")
         if self._csv_writer is not None:
