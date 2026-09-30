@@ -55,6 +55,19 @@ def _row(label_text, value_text=""):
     return row, value
 
 
+def _tier(in_envelope):
+    """Normalise a bool (2-tier) or tier string (3-tier) to a tier string."""
+    if in_envelope is True:
+        return "full"
+    if in_envelope is False or in_envelope is None:
+        return "outside"
+    return in_envelope
+
+
+TIER_STATUS = {"full": "good", "reduced": "warn", "outside": "bad"}
+TIER_TEXT = {"full": "FULL", "reduced": "REDUCED", "outside": "OUTSIDE"}
+
+
 # ====================================================================
 # Base panel
 # ====================================================================
@@ -175,13 +188,15 @@ class PosePanel(HudPanel):
         dist_row, self._dist_val = _row("Distance", "--")
         elev_row, self._elev_val = _row("Elevation", "--")
         az_row, self._az_val = _row("Azimuth", "--")
+        zone_row, self._zone_val = _row("Zone", "--")
 
         layout.addWidget(dist_row)
         layout.addWidget(elev_row)
         layout.addWidget(az_row)
+        layout.addWidget(zone_row)
 
-        self.setMinimumSize(240, 120)
-        self._last = {"dist": None, "elev": None, "az": None}
+        self.setMinimumSize(240, 150)
+        self._last = {"dist": None, "elev": None, "az": None, "zone": None}
 
     def _set_status(self, label, status):
         if label.property("status") != status:
@@ -194,22 +209,28 @@ class PosePanel(HudPanel):
             d_str = f"{distance_mm / 10:.0f} cm"
             e_str = f"{elev_deg:+.0f}\u00b0"
             a_str = f"{az_deg:.0f}\u00b0"
-            e_status = "good" if in_envelope else "bad"
+            tier = _tier(in_envelope)
+            e_status = TIER_STATUS[tier]
+            z_str = TIER_TEXT[tier]
         else:
-            d_str = e_str = a_str = "--"
+            d_str = e_str = a_str = z_str = "--"
             e_status = "muted"
 
         if self._last["dist"] != d_str:
             self._dist_val.setText(d_str)
             self._last["dist"] = d_str
-        if self._last["elev"] != e_str:
+        if self._last["elev"] != (e_str, e_status):
             self._elev_val.setText(e_str)
             self._set_status(self._elev_val, e_status)
-            self._last["elev"] = e_str
-        if self._last["az"] != a_str:
+            self._last["elev"] = (e_str, e_status)
+        if self._last["az"] != (a_str, e_status):
             self._az_val.setText(a_str)
             self._set_status(self._az_val, e_status)
-            self._last["az"] = a_str
+            self._last["az"] = (a_str, e_status)
+        if self._last["zone"] != (z_str, e_status):
+            self._zone_val.setText(z_str)
+            self._set_status(self._zone_val, e_status)
+            self._last["zone"] = (z_str, e_status)
 
 
 # ====================================================================
@@ -279,27 +300,30 @@ class TrePanel(HudPanel):
             bv = tre_values[best]
             bl = labels[best] if labels else "?"
             tre_str = f"{bv:.2f} mm"
-            if not in_envelope:
+            tier = _tier(in_envelope)
+            if tier == "outside" or bv >= 2.0:
                 status = "bad"
+            elif tier == "reduced":
+                status = "warn"
             elif bv < 1.0:
                 status = "good"
-            elif bv < 2.0:
-                status = "warn"
             else:
-                status = "bad"
+                status = "warn"
         else:
             bl = "--"
             tre_str = "--"
             status = "muted"
 
-        if self._last["tgt"] != bl:
+        # Cache text AND status, so a tier change recolours even when
+        # the text is unchanged.
+        if self._last["tgt"] != (bl, status):
             self._tgt_val.setText(bl)
             self._set_status(self._tgt_val, status)
-            self._last["tgt"] = bl
-        if self._last["tre"] != tre_str:
+            self._last["tgt"] = (bl, status)
+        if self._last["tre"] != (tre_str, status):
             self._tre_val.setText(tre_str)
             self._set_status(self._tre_val, status)
-            self._last["tre"] = tre_str
+            self._last["tre"] = (tre_str, status)
 
 
 # ====================================================================
@@ -390,6 +414,7 @@ class ShortcutsPanel(QFrame):
         ("h", "toggle hud"),
         ("f", "fullscreen"),
         ("s", "screenshot"),
+        ("n", "next step"),
         ("esc", "toggle help"),
         ("q", "quit"),
     ]
@@ -545,13 +570,13 @@ class TargetRadarWidget(QWidget):
             self.update()
 
     def _tre_colour(self, tre):
-        if not self._in_env:
-            return QColor(215, 90, 90)
-        if tre < 1.0:
-            return QColor(100, 210, 140)
-        if tre < 2.0:
-            return QColor(235, 180, 80)
-        return QColor(215, 90, 90)
+        tier = _tier(self._in_env)
+        red, amber, green = QColor(215, 90, 90), QColor(235, 180, 80), QColor(100, 210, 140)
+        if tier == "outside" or tre >= 2.0:
+            return red
+        if tier == "reduced":
+            return amber
+        return green if tre < 1.0 else amber
 
     def paintEvent(self, event):
         painter = QPainter(self)

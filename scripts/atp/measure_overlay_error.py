@@ -48,6 +48,7 @@ for sub in ("registration", "tre_analysis"):
 
 from ar_targets import load_targets            # noqa: E402
 from ar_board import build_corner_lut, load_marker_map   # noqa: E402
+from ar_theme import envelope_tier                       # noqa: E402
 
 try:
     from ar_tre import compute_tre_scalar, DEFAULT_FLE_MM  # noqa: E402
@@ -101,6 +102,7 @@ def max_ray_angle_deg(rays):
 class Clicker:
     def __init__(self):
         self.pt = None
+        self.last_hidden = False
         cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(WIN, self._cb)
 
@@ -108,43 +110,117 @@ class Clicker:
         if event == cv2.EVENT_LBUTTONDOWN:
             self.pt = (x, y)
 
-    def ask(self, img, target_px, title):
-        """Returns clicked full-image pixel (float), 'skip', or 'quit'."""
-        h, w = img.shape[:2]
-        pad = cv2.copyMakeBorder(img, CROP, CROP, CROP, CROP,
-                                 cv2.BORDER_CONSTANT, value=(40, 40, 40))
-        cx, cy = int(round(target_px[0])), int(round(target_px[1]))
-        crop = pad[cy:cy + 2 * CROP, cx:cx + 2 * CROP]
-        zoom = cv2.resize(crop, None, fx=SCALE, fy=SCALE,
-                          interpolation=cv2.INTER_CUBIC)
-        x0, y0 = cx - CROP, cy - CROP   # crop origin in full-image coords
+    def ask(self, img, target_px, title, require_hidden=False):
+        """
+        Returns clicked full-image pixel (float), 'skip', or 'quit'.
+        Shows a bold red cross at the projected target. Press h to hide it.
+        With require_hidden=True a click is only accepted while the cross is
+        hidden, so you never click with the target marked on screen.
+        self.last_hidden records whether the cross was hidden at accept time.
+        """
+        zoom, x0, y0 = make_view(img, target_px)
         self.pt = None
+        cross_visible = True
+        msg = ""
 
         while True:
-            disp = zoom.copy()
-            # projected target (cyan cross)
-            tx = (target_px[0] - x0) * SCALE
-            ty = (target_px[1] - y0) * SCALE
-            cv2.drawMarker(disp, (int(tx), int(ty)), (255, 220, 0),
-                           cv2.MARKER_CROSS, 28, 1)
-            if self.pt is not None:
-                cv2.circle(disp, self.pt, 5, (0, 0, 255), 1)
-                cv2.drawMarker(disp, self.pt, (0, 0, 255),
-                               cv2.MARKER_CROSS, 10, 1)
-            cv2.rectangle(disp, (0, 0), (disp.shape[1], 52), (0, 0, 0), -1)
-            cv2.putText(disp, title, (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(disp, "click dot centre | space=accept  s=skip  q=quit",
-                        (10, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                        (180, 180, 180), 1, cv2.LINE_AA)
+            disp = draw_view(zoom, x0, y0, target_px, self.pt, cross_visible,
+                             title, require_hidden, msg)
             cv2.imshow(WIN, disp)
             k = cv2.waitKey(20) & 0xFF
-            if k in (ord(" "), 13) and self.pt is not None:
-                return (x0 + self.pt[0] / SCALE, y0 + self.pt[1] / SCALE)
-            if k == ord("s"):
+            if k == ord("h"):
+                cross_visible = not cross_visible
+                msg = ""
+            elif k in (ord(" "), 13) and self.pt is not None:
+                if require_hidden and cross_visible:
+                    msg = "hide the cross first (h), then click the dot"
+                    continue
+                self.last_hidden = not cross_visible
+                return zoom_to_full(self.pt[0], self.pt[1], x0, y0)
+            elif k == ord("s"):
                 return "skip"
-            if k == ord("q"):
+            elif k == ord("q"):
                 return "quit"
+
+
+def draw_view(zoom, x0, y0, target_px, pt, cross_visible, title,
+              require_hidden=False, msg=""):
+    """Compose the display: bold red reticle at the target (clear centre so the
+    dot stays visible), your click, and the header text. Pure function."""
+    disp = zoom.copy()
+    if cross_visible:
+        hx, hy = (int(round(t)) for t in full_to_zoom(target_px[0], target_px[1], x0, y0))
+        gap, arm, thick = 12, 48, 3
+        red = (0, 0, 255)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            cv2.line(disp, (hx + dx * gap, hy + dy * gap),
+                     (hx + dx * (gap + arm), hy + dy * (gap + arm)),
+                     red, thick, cv2.LINE_AA)
+    if pt is not None:
+        cv2.circle(disp, pt, 6, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.drawMarker(disp, pt, (0, 255, 0), cv2.MARKER_CROSS, 12, 1)
+    cv2.rectangle(disp, (0, 0), (disp.shape[1], 52), (0, 0, 0), -1)
+    cv2.putText(disp, title, (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    if msg:
+        cv2.putText(disp, msg, (10, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (0, 0, 255), 1, cv2.LINE_AA)
+    else:
+        help_txt = ("h=hide cross, click dot centre, space=accept  s=skip  q=quit"
+                    if not require_hidden else
+                    "h=hide cross FIRST, click dot centre, space=accept  s=skip  q=quit")
+        cv2.putText(disp, help_txt, (10, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (180, 180, 180), 1, cv2.LINE_AA)
+    return disp
+
+
+def zoom_to_full(zx, zy, x0, y0):
+    """Zoomed-view pixel -> full-image pixel (OpenCV pixel-centre convention)."""
+    return x0 + (zx + 0.5) / SCALE - 0.5, y0 + (zy + 0.5) / SCALE - 0.5
+
+
+def full_to_zoom(u, v, x0, y0):
+    return (u - x0 + 0.5) * SCALE - 0.5, (v - y0 + 0.5) * SCALE - 0.5
+
+
+def make_view(img, centre):
+    """Zoomed crop around centre. Returns (zoom_img, x0, y0) where x0,y0 is
+    the crop origin in full-image pixels. Full-image px = x0 + zoom_px / SCALE."""
+    pad = cv2.copyMakeBorder(img, CROP, CROP, CROP, CROP,
+                             cv2.BORDER_CONSTANT, value=(40, 40, 40))
+    cx, cy = int(round(centre[0])), int(round(centre[1]))
+    crop = pad[cy:cy + 2 * CROP, cx:cx + 2 * CROP]
+    zoom = cv2.resize(crop, None, fx=SCALE, fy=SCALE,
+                      interpolation=cv2.INTER_CUBIC)
+    return zoom, cx - CROP, cy - CROP
+
+
+def compare_sessions(prev_csv, rows):
+    """Paired comparison with an earlier measurement of the same screenshots."""
+    if not Path(prev_csv).exists():
+        print(f"\nCompare: {prev_csv} not found, skipping the comparison "
+              f"(your measurements are saved).")
+        return
+    prev = {(r["shot"], r["label"]): float(r["err_mm"])
+            for r in csv.DictReader(open(prev_csv))}
+    a, b = [], []
+    for r in rows:
+        k = (r["shot"], r["label"])
+        if k in prev:
+            a.append(prev[k])
+            b.append(r["err_mm"])
+    if len(a) < 3:
+        print(f"\nCompare: only {len(a)} matching (shot, target) pairs in {prev_csv}")
+        return
+    a, b = np.array(a), np.array(b)
+    d = b - a
+    print(f"\n=== Session comparison vs {Path(prev_csv).name} ({len(a)} pairs) ===")
+    print(f"mean error  previous {a.mean():.2f}  this {b.mean():.2f}  "
+          f"(change {d.mean():+.2f} mm, lower in {(d < 0).sum()}/{len(d)})")
+    print(f"paired difference SD {d.std(ddof=1):.2f} mm, mean |diff| {np.abs(d).mean():.2f}, "
+          f"max {np.abs(d).max():.2f}")
+    print(f"click repeatability (one session) ~ {d.std(ddof=1) / np.sqrt(2):.2f} mm; "
+          f"session-to-session shift {d.mean():+.2f} mm")
 
 
 # --------------------------------------------------------------------
@@ -162,12 +238,28 @@ def main():
                     help="Substring filter for target labels (default: entry points)")
     ap.add_argument("--fle", type=float, default=DEFAULT_FLE_MM)
     ap.add_argument("--out", default="data/atp/atp2_overlay_error")
+    ap.add_argument("--require-hidden", action="store_true",
+                    help="Only accept a click while the target cross is hidden (press h). "
+                         "Removes anchoring on the marker; use for the numbers you report.")
+    ap.add_argument("--skip", nargs="*", default=[],
+                    help="Skip shots whose file name contains any of these strings "
+                         "(e.g. --skip 093431_001 093445_003)")
+    ap.add_argument("--compare", default=None,
+                    help="Earlier per-view CSV of the same screenshots, for a paired comparison")
     args = ap.parse_args()
 
     shots = sorted(glob.glob(args.shots))
     if not shots:
         print(f"No pose files match {args.shots}")
         return
+
+    if args.skip:
+        kept = [f for f in shots if not any(k in Path(f).name for k in args.skip)]
+        print(f"Skipping {len(shots) - len(kept)} shot(s) matching {args.skip}")
+        shots = kept
+        if not shots:
+            print("No shots left after --skip.")
+            return
 
     pts, labels, _ = load_targets(args.isthmus, args.entry)
     sel = [i for i, l in enumerate(labels) if args.labels in l]
@@ -199,6 +291,10 @@ def main():
         f = 0.5 * (K[0, 0] + K[1, 1])
         h, w = img.shape[:2]
 
+        tier = pose.get("env_tier") or envelope_tier(
+            pose.get("elevation_deg", np.nan), pose.get("azimuth_deg", np.nan),
+            pose.get("distance_mm"))
+
         tre = None
         if compute_tre_scalar is not None and pose.get("visible_ids"):
             try:
@@ -214,7 +310,7 @@ def main():
             if not (0 <= p[0] < w and 0 <= p[1] < h):
                 continue
             title = f"{Path(shot).stem.replace('_pose', '')}   {labels[i]}"
-            res = ui.ask(img, p, title)
+            res = ui.ask(img, p, title, require_hidden=args.require_hidden)
             if res == "quit":
                 quit_all = True
                 break
@@ -242,10 +338,12 @@ def main():
                 "elev_deg": round(pose.get("elevation_deg", np.nan), 1),
                 "az_deg": round(pose.get("azimuth_deg", np.nan), 1),
                 "n_markers": pose.get("n_markers"),
+                "tier": tier,
                 "rms_px": pose.get("rms_px"),
                 "target_u": round(p[0], 2), "target_v": round(p[1], 2),
                 "dot_u": round(click[0], 2), "dot_v": round(click[1], 2),
                 "err_px": round(err_px, 2),
+                "cross_hidden": bool(ui.last_hidden),
                 "depth_mm": round(depth, 1),
                 "err_mm": round(float(np.linalg.norm(dv)), 3),
                 "dx_mm": round(dv[0], 3), "dy_mm": round(dv[1], 3), "dz_mm": round(dv[2], 3),
@@ -267,6 +365,9 @@ def main():
         wr = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         wr.writeheader()
         wr.writerows(rows)
+
+    if args.compare:
+        compare_sessions(args.compare, rows)
 
     # --- triangulated 3D CSV ---
     rows3d = []
@@ -303,6 +404,12 @@ def main():
         print(f"{lv:<6s}{len(sub):>4d}{ee.mean():>10.2f}{ee.max():>9.2f}"
               f"{np.mean([r['dist_from_markers_mm'] for r in sub]):>9.0f}"
               f"{(np.mean(pt) if pt else float('nan')):>10.2f}")
+    print(f"\n{'tier':<9s}{'n':>4s}{'mean mm':>10s}{'median':>8s}{'max mm':>9s}{'>2mm':>7s}")
+    for tier in ("full", "reduced", "outside"):
+        ee = np.array([r["err_mm"] for r in rows if r["tier"] == tier])
+        if len(ee):
+            print(f"{tier:<9s}{len(ee):>4d}{ee.mean():>10.2f}{np.median(ee):>8.2f}"
+                  f"{ee.max():>9.2f}{(ee > 2).sum():>4d}/{len(ee)}")
     if rows3d:
         e3 = np.array([r["err3d_mm"] for r in rows3d])
         print(f"\n=== Triangulated 3D error ({len(rows3d)} targets) ===")

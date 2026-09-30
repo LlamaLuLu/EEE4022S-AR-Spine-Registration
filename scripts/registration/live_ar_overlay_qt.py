@@ -46,6 +46,7 @@ from ar_overlay import (
     is_in_envelope,
 )
 from ar_stl import load_stl_for_wireframe
+from ar_theme import envelope_tier
 
 # Qt HUD
 from ar_qt_styles import QSS
@@ -220,6 +221,7 @@ class ARWindow(QMainWindow):
         # --- CSV data logger (for ATP tests) ---
         self._csv_file = None
         self._csv_writer = None
+        self._step = 0
         if args.log:
             import csv
             self._csv_file = open(args.log, "w", newline="")
@@ -227,9 +229,9 @@ class ARWindow(QMainWindow):
             # Header
             tre_headers = [f"TRE_{l}" for l in self.target_labels]
             self._csv_writer.writerow([
-                "timestamp", "state", "n_markers", "pnp_ok", "rms_px",
+                "timestamp", "step", "state", "n_markers", "pnp_ok", "rms_px",
                 "distance_mm", "elevation_deg", "azimuth_deg",
-                "cam_x", "cam_y", "cam_z", "in_envelope",
+                "cam_x", "cam_y", "cam_z", "in_envelope", "env_tier",
                 "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
                 "visible_ids",
             ] + tre_headers)
@@ -363,6 +365,7 @@ class ARWindow(QMainWindow):
         distance_mm = elev_deg = az_deg = 0.0
         cam_pos = np.zeros(3)
         in_env = False
+        env_tier = "outside"
         tre_values = None
         visible_ids = []
         rvec = tvec = None
@@ -405,7 +408,8 @@ class ARWindow(QMainWindow):
                 if pnp_ok:
                     self.prev_rvec, self.prev_tvec = rvec.copy(), tvec.copy()
                     self.last_good_time = now
-                    in_env = is_in_envelope(elev_deg, az_deg)
+                    env_tier = envelope_tier(elev_deg, az_deg, distance_mm)
+                    in_env = env_tier == "full"
                     tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
                                                     self.target_pts, self.args.fle)
 
@@ -427,7 +431,8 @@ class ARWindow(QMainWindow):
                     self.state = "STALE"
                 rvec, tvec = self.prev_rvec, self.prev_tvec
                 cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                in_env = is_in_envelope(elev_deg, az_deg)
+                env_tier = envelope_tier(elev_deg, az_deg, distance_mm)
+                in_env = env_tier == "full"
                 tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
                                                 self.target_pts, self.args.fle)
             else:
@@ -468,7 +473,7 @@ class ARWindow(QMainWindow):
                 draw_targets(frame, self.target_pts, self.target_labels,
                              tre_values, rvec, tvec, self.K, self.D,
                              visible_ids, self.corner_lut, self.args.fle,
-                             in_env, _NoOpTR, self.show_ellipses, doff)
+                             env_tier, _NoOpTR, self.show_ellipses, doff)
 
         t3 = time.perf_counter()
 
@@ -481,10 +486,11 @@ class ARWindow(QMainWindow):
             "STALE": "bad",
         }.get(self.state, "default"))
 
-        self.pose_panel.update_values(distance_mm, elev_deg, az_deg, in_env)
-        self.pose_panel.set_accent("good" if in_env else "bad")
+        self.pose_panel.update_values(distance_mm, elev_deg, az_deg, env_tier)
+        self.pose_panel.set_accent(
+            {"full": "good", "reduced": "warn"}.get(env_tier, "bad"))
 
-        self.tre_panel.update_values(tre_values, self.target_labels, in_env)
+        self.tre_panel.update_values(tre_values, self.target_labels, env_tier)
 
         # State pill
         countdown = 0.0
@@ -502,11 +508,11 @@ class ARWindow(QMainWindow):
 
         # Target radar
         if self._show_radar and self.state == "NAVIGATING":
-            self.target_radar.set_tre_values(tre_values, self.target_labels, in_env)
+            self.target_radar.set_tre_values(tre_values, self.target_labels, env_tier)
             if not self.target_radar.isVisible():
                 self.target_radar.show()
         else:
-            self.target_radar.set_tre_values(None, [], in_env)
+            self.target_radar.set_tre_values(None, [], env_tier)
 
         # Reposition state pill (its width changes with countdown text)
         w = self.width()
@@ -528,6 +534,7 @@ class ARWindow(QMainWindow):
                 "distance_mm": float(distance_mm),
                 "elevation_deg": float(elev_deg),
                 "azimuth_deg": float(az_deg),
+                "env_tier": env_tier,
             }
         else:
             self._last_pose = None
@@ -556,11 +563,11 @@ class ARWindow(QMainWindow):
             else:
                 tre_vals = [""] * len(self.target_labels)
             self._csv_writer.writerow([
-                f"{now:.3f}", self.state, n_markers, pnp_ok,
+                f"{now:.3f}", self._step, self.state, n_markers, pnp_ok,
                 f"{reproj_rms:.2f}" if not np.isnan(reproj_rms) else "",
                 f"{distance_mm:.1f}", f"{elev_deg:.1f}", f"{az_deg:.1f}",
                 f"{cam_pos[0]:.1f}", f"{cam_pos[1]:.1f}", f"{cam_pos[2]:.1f}",
-                in_env,
+                in_env, env_tier,
                 f"{(t1-t0)*1000:.1f}", f"{(t2-t1)*1000:.1f}",
                 f"{(t3-t2)*1000:.1f}", f"{(t4-t3)*1000:.1f}",
                 "|".join(str(i) for i in visible_ids),
@@ -625,6 +632,9 @@ class ARWindow(QMainWindow):
             self.prev_rvec = self.prev_tvec = None
         elif text == "s":
             self._save_screenshot()
+        elif text == "n":
+            self._step += 1
+            print(f"--- step {self._step} ---")
 
     def _save_screenshot(self):
         """Save raw frame (with on-frame overlays) and full window (with HUD)."""
@@ -654,8 +664,8 @@ class ARWindow(QMainWindow):
         self.grab().save(f"{base}_window.png")
         print(f"Screenshot saved: {base}_*.png")
         if self._csv_writer is not None:
-            self._csv_writer.writerow([f"{time.time():.3f}", "SCREENSHOT",
-                                       base.name])
+            self._csv_writer.writerow([f"{time.time():.3f}", self._step,
+                                       "SCREENSHOT", base.name])
             self._csv_file.flush()
 
     def closeEvent(self, event):
