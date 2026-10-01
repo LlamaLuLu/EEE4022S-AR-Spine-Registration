@@ -117,6 +117,11 @@ def summarise(path, rows=None, name=None):
         "az_deg": round(np.nanmean(az[good]), 1) if good.any() else np.nan,
         "frame_ms_mean": round(ft_m, 1),
         "frame_ms_p95": round(ft_95, 1),
+        "frame_ms_max": round(float(np.nanmax(total_ms)), 1),
+        "grab_ms": round(float(np.nanmean([fnum(r["grab_ms"]) for r in rows])), 1),
+        "detect_pnp_ms": round(float(np.nanmean([fnum(r["detect_pnp_ms"]) for r in rows])), 1),
+        "overlay_ms": round(float(np.nanmean([fnum(r["overlay_ms"]) for r in rows])), 1),
+        "qt_ms": round(float(np.nanmean([fnum(r["qt_ms"]) for r in rows])), 1),
         "tre_mean_mm": round(tre_mean, 3),
         "tre_max_mm": round(tre_max, 3),
         "tre_worst_p95_mm": round(tre_worst_p95, 3),
@@ -144,6 +149,21 @@ def summarise_by_step(path, trim_s=0.0, trim_end_s=0.0):
             res = {"step": st, **res}
             out.append(res)
     return out
+
+
+def print_timing_table(results):
+    """FPS and per-stage processing time per step (ATP-6)."""
+    hdr = ["step", "frames", "FPS", "grab", "detect", "overlay", "qt",
+           "total", "total95", "total_max"]
+    keys = ["step", "frames", "fps", "grab_ms", "detect_pnp_ms", "overlay_ms",
+            "qt_ms", "frame_ms_mean", "frame_ms_p95", "frame_ms_max"]
+    print("".join(f"{h:>10s}" for h in hdr) + "   (ms per frame, processing only)")
+    for r in results:
+        out = ""
+        for k in keys:
+            v = r.get(k)
+            out += f"{v:>10.1f}" if isinstance(v, float) else f"{str(v):>10s}"
+        print(out)
 
 
 def print_step_table(results):
@@ -217,6 +237,8 @@ def main():
     ap.add_argument("--by-tier", action="store_true",
                     help="Classify each step by envelope tier and summarise per tier "
                          "(implies --by-step; accepts several logs)")
+    ap.add_argument("--timing", action="store_true",
+                    help="With --by-step: print FPS and per-stage processing time instead of tracking stats")
     ap.add_argument("--by-step", action="store_true",
                     help="Split each log by the step counter ('n' key) and summarise each step")
     args = ap.parse_args()
@@ -259,7 +281,7 @@ def main():
             rs = summarise_by_step(p, args.trim, args.trim_end)
             if rs:
                 print(f"\n=== {Path(p).name} ===")
-                print_step_table(rs)
+                (print_timing_table if args.timing else print_step_table)(rs)
                 results.extend(rs)
         if args.out and results:
             with open(args.out, "w", newline="") as f:
