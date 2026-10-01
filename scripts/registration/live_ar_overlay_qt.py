@@ -232,7 +232,7 @@ class ARWindow(QMainWindow):
                 "timestamp", "step", "state", "n_markers", "pnp_ok", "rms_px",
                 "distance_mm", "elevation_deg", "azimuth_deg",
                 "cam_x", "cam_y", "cam_z", "in_envelope", "env_tier",
-                "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
+                "amb_rejected", "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
                 "visible_ids",
             ] + tre_headers)
             print(f"Logging to: {args.log}")
@@ -366,6 +366,7 @@ class ARWindow(QMainWindow):
         cam_pos = np.zeros(3)
         in_env = False
         env_tier = "outside"
+        amb_rejected = False   # single-face solution discarded by the side check
         tre_values = None
         visible_ids = []
         rvec = tvec = None
@@ -389,8 +390,10 @@ class ARWindow(QMainWindow):
 
                 if face_a_only and cam_pos[2] > -103.7 + 100:
                     pnp_ok = False  # camera way too cranial for Face A
+                    amb_rejected = True
                 elif face_b_only and cam_pos[0] < 70.1 - 100:
                     pnp_ok = False  # camera way too medial for Face B
+                    amb_rejected = True
 
                 # Per-marker reprojection error (debug: find geometry mismatches)
                 if pnp_ok and reproj_rms > 5.0:
@@ -567,7 +570,7 @@ class ARWindow(QMainWindow):
                 f"{reproj_rms:.2f}" if not np.isnan(reproj_rms) else "",
                 f"{distance_mm:.1f}", f"{elev_deg:.1f}", f"{az_deg:.1f}",
                 f"{cam_pos[0]:.1f}", f"{cam_pos[1]:.1f}", f"{cam_pos[2]:.1f}",
-                in_env, env_tier,
+                in_env, env_tier, int(amb_rejected),
                 f"{(t1-t0)*1000:.1f}", f"{(t2-t1)*1000:.1f}",
                 f"{(t3-t2)*1000:.1f}", f"{(t4-t3)*1000:.1f}",
                 "|".join(str(i) for i in visible_ids),
