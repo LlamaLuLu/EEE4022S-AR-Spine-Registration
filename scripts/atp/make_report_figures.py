@@ -130,7 +130,9 @@ def fig_envelope(out, a):
     az_wedge(FULL_AZ[0], FULL_AZ[1], cm(FULL_DIST[0]), cm(FULL_DIST[1]), fc=C_FULL, ec="none", alpha=0.7)
 
     # phantom footprint (to scale) and L-bracket. page_x = -X (patient left to the left), page_y = Z
-    ax.add_patch(Rectangle((-5.02, -8.37), 11.03, 16.97, fc="#d9d9d9", ec="k", lw=0.5, zorder=3))
+    # BASE_v2.stl: plate top X -50.2..50.2, Z -83.6..79.4 (cm below); bracket seat X 35.2..60.1, Z -93.5..-23.7
+    ax.add_patch(Rectangle((-6.01, -9.35), 2.49, 6.98, fc="#bdbdbd", ec="k", lw=0.4, zorder=3))
+    ax.add_patch(Rectangle((-5.02, -8.36), 10.04, 16.30, fc="#d9d9d9", ec="k", lw=0.5, zorder=3))
     ax.plot([-7.01, 0.99], [-10.37, -10.37], c="k", lw=1.8, zorder=4)     # Face A (caudal wall)
     ax.plot([-7.01, -7.01], [-10.37, -2.37], c="k", lw=1.8, zorder=4)     # Face B (lateral wall)
 

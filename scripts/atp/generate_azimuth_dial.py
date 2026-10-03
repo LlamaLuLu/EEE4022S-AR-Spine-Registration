@@ -30,7 +30,11 @@ DPI = 300
 MM_PER_INCH = 25.4
 PAGE_W_MM, PAGE_H_MM = 210, 297
 DIAMETER_MM = 190
-PLATE_W_MM, PLATE_L_MM = 110.3, 169.7   # base plate footprint (X by Z)
+# BASE_v2.stl: plate top X -50.2..50.2, Z -83.6..79.4; bracket seat X 35.2..60.1, Z -93.5..-23.7
+PLATE_X = (-50.2, 50.2)
+PLATE_Z = (-83.6, 79.4)
+SEAT_X = (35.2, 60.1)
+SEAT_Z = (-93.5, -23.7)
 
 
 def mm(v):
@@ -114,11 +118,17 @@ def main():
         dashed_line(d, page_point(cx, cy, 6, az), page_point(cx, cy, R - 22, az),
                     mm(3), mm(3), mm(0.15), fill=150)
 
-    # Base plate outline (long axis along 0-180), dashed
-    hw, hl = mm(PLATE_W_MM / 2), mm(PLATE_L_MM / 2)
-    corners = [(cx - hw, cy - hl), (cx + hw, cy - hl), (cx + hw, cy + hl), (cx - hw, cy + hl)]
-    for i in range(4):
-        dashed_line(d, corners[i], corners[(i + 1) % 4], mm(4), mm(2), mm(0.35))
+    # Base plate and bracket-seat outlines (BASE_v2). Page-left = patient left (+X), page-up = cranial (+Z).
+    def pg(X, Z):
+        return (cx - mm(X), cy - mm(Z))
+    def dashed_rect(xr, zr):
+        c = [pg(xr[1], zr[1]), pg(xr[0], zr[1]), pg(xr[0], zr[0]), pg(xr[1], zr[0])]
+        for i in range(4):
+            dashed_line(d, c[i], c[(i + 1) % 4], mm(4), mm(2), mm(0.35))
+    dashed_rect(PLATE_X, PLATE_Z)
+    dashed_rect(SEAT_X, SEAT_Z)
+    hw = mm((PLATE_X[1] - PLATE_X[0]) / 2)
+    hl_top, hl_bot = mm(PLATE_Z[1]), mm(-PLATE_Z[0])
 
     # Ticks and labels
     lab_font = font(4.2, True)
@@ -139,8 +149,8 @@ def main():
 
     # Anatomical labels inside the plate outline
     small = font(3.2, True)
-    centred_text(d, (cx, cy - hl + mm(24)), "CRANIAL (L1)", small, backing=True)
-    centred_text(d, (cx, cy + hl - mm(24)), "CAUDAL (bracket)", small, backing=True)
+    centred_text(d, (cx, cy - hl_top + mm(24)), "CRANIAL (L1)", small, backing=True)
+    centred_text(d, (cx, cy + hl_bot - mm(24)), "CAUDAL (bracket)", small, backing=True)
     centred_text(d, (cx - hw + mm(10), cy), "LEFT", small, backing=True)
     centred_text(d, (cx + hw - mm(11), cy), "RIGHT", small, backing=True)
 
