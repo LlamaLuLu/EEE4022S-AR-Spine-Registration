@@ -13,14 +13,17 @@ and adds what is needed to compare the simulation with the physical tests:
 
 Subcommands
   fit      fit the visibility model to the ATP-3 distance/azimuth/elevation sweeps
-  design   re-run the V0-V3 design comparison on the current variant files
+  design   compare every variant in design_variants_oriented (V0-V3 and the domes)
+  tilt     sweep the dome tilt angle for each DOME_CONFIGS entry
   atp4     marker-set study: MC vs Fitzpatrick vs the ATP-4 measurements
   atp2     error budget: MC overlay error at the ATP-2 poses vs measured error
   fle      check the MC noise path against the static single-marker FLE
 
 Usage (from repo root; paths shown are the defaults):
   python scripts/tre_analysis/mc_validation.py fit
-  python scripts/tre_analysis/mc_validation.py design --max-angle 62 --min-width 10
+  python scripts/tre_analysis/mc_validation.py design --gate 5 --variants V3 D
+  python scripts/tre_analysis/mc_validation.py design --gate 5 --variants D --hands both
+  python scripts/tre_analysis/mc_validation.py tilt --gate 5 --tilts 15 20 25 30 35 40 45
   python scripts/tre_analysis/mc_validation.py atp4
   python scripts/tre_analysis/mc_validation.py atp2 --poses "data/screenshots/atp2_crisp/shot_*_pose.json" \
         --measured data/atp/atp2_crisp.csv
@@ -47,7 +50,8 @@ from monte_carlo_tre import (                                    # noqa: E402
     PHANTOM_CYLINDER_Z_MIN, PHANTOM_CYLINDER_Z_MAX,
 )
 from design_variants import load_pedicles_from_json              # noqa: E402
-from design_variants_oriented import VARIANTS_ORIENTED, V3_ORIENTED   # noqa: E402
+from design_variants_oriented import (                          # noqa: E402
+    VARIANTS_ORIENTED, V3_ORIENTED, DOME_CONFIGS, build_dome)
 
 try:
     from fitzpatrick_tre import predict_tre                      # noqa: E402
@@ -58,6 +62,7 @@ IMG_W, IMG_H = 1920, 1080
 MARKER_MM = 20.0
 GATE = 4                      # live pipeline: MIN_MARKERS_PNP
 FLE_FITZ_MM = 0.8             # Fitzpatrick input used in the pipeline
+PNP_FLAG = cv2.SOLVEPNP_SQPNP
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +76,7 @@ class Vis:
     occlusion: bool = True
 
 
-def visible_ids(oriented, pose, K, dist, vis, size_mm=MARKER_MM):
+def visible_ids(oriented, pose, K, dist, vis, size_mm=MARKER_MM, occluders=()):
     rvec, tvec = pose
     R, _ = cv2.Rodrigues(rvec)
     cam = -R.T @ tvec.ravel()
@@ -91,6 +96,8 @@ def visible_ids(oriented, pose, K, dist, vis, size_mm=MARKER_MM):
                 c + n * 0.5, to_cam, PHANTOM_CYLINDER_CENTER_XY, PHANTOM_CYLINDER_RADIUS_MM,
                 PHANTOM_CYLINDER_Z_MIN, PHANTOM_CYLINDER_Z_MAX):
             continue
+        if occluders and blocked(c + n * 0.5, to_cam, occluders):
+            continue
         px, _ = cv2.projectPoints(corners_from_oriented_marker(c, Rm, size_mm), rvec, tvec, K, dist)
         px = px.reshape(-1, 2)
         m = vis.margin_px
@@ -99,6 +106,78 @@ def visible_ids(oriented, pose, K, dist, vis, size_mm=MARKER_MM):
             continue
         out.append(i)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Hand stand-in occluders and coplanarity
+# ---------------------------------------------------------------------------
+def _seg_seg_dist(p0, p1, q0, q1):
+    """Shortest distance between segments p0-p1 and q0-q1."""
+    d1, d2, r = p1 - p0, q1 - q0, p0 - q0
+    a, e, f = d1 @ d1, d2 @ d2, d2 @ r
+    c, b = d1 @ r, d1 @ d2
+    den = a * e - b * b
+    s = np.clip((b * f - c * e) / den, 0.0, 1.0) if den > 1e-12 else 0.0
+    t = (b * s + f) / e if e > 1e-12 else 0.0
+    if t < 0.0:
+        t, s = 0.0, np.clip(-c / a, 0.0, 1.0)
+    elif t > 1.0:
+        t, s = 1.0, np.clip((b - c) / a, 0.0, 1.0)
+    return float(np.linalg.norm((p0 + s * d1) - (q0 + t * d2)))
+
+
+def _seg_hits_box(p0, d, lo, hi):
+    """Slab test: does the segment p0 + t*d, t in [0, 1], enter the box [lo, hi]?"""
+    t0, t1 = 0.0, 1.0
+    for k in range(3):
+        if abs(d[k]) < 1e-12:
+            if p0[k] < lo[k] or p0[k] > hi[k]:
+                return False
+            continue
+        ta, tb = sorted(((lo[k] - p0[k]) / d[k], (hi[k] - p0[k]) / d[k]))
+        t0, t1 = max(t0, ta), min(t1, tb)
+        if t0 > t1:
+            return False
+    return True
+
+
+def blocked(origin, direction, occluders):
+    """True if the sight line origin -> origin + direction passes through any occluder.
+    Occluders: ("capsule", p0, p1, radius) or ("box", lo, hi)."""
+    end = origin + direction
+    for occ in occluders:
+        if occ[0] == "capsule":
+            if _seg_seg_dist(origin, end, occ[1], occ[2]) < occ[3]:
+                return True
+        elif _seg_hits_box(origin, direction, occ[1], occ[2]):
+            return True
+    return False
+
+
+def hand_occluders(target, side):
+    """Crude surgeon's hand and forearm working at one target.
+    side = "left" (surgeon stands at +X) or "right" (-X).
+    Hand: 90 x 30 x 100 mm box hovering beside and above the target.
+    Forearm: 35 mm radius capsule from the wrist out to the elbow."""
+    s = 1.0 if side == "left" else -1.0
+    t = np.asarray(target, float)
+    hc = t + np.array([s * 30.0, 50.0, 0.0])
+    half = np.array([45.0, 15.0, 50.0])
+    wrist = t + np.array([s * 75.0, 55.0, 0.0])
+    elbow = t + np.array([s * 330.0, 200.0, -40.0])
+    return [("box", hc - half, hc + half), ("capsule", wrist, elbow, 35.0)]
+
+
+def noncoplanar(oriented, ids, size_mm=MARKER_MM, tol_mm=2.0):
+    """True if the visible markers' corners do not all lie in one plane
+    (RMS out-of-plane distance above tol_mm). A single flat face fails; two faces,
+    or a raised top marker with a ring, pass."""
+    if len(ids) < 2:
+        return False
+    pts = np.vstack([corners_from_oriented_marker(oriented[i][0], oriented[i][1], size_mm) for i in ids])
+    pts = pts - pts.mean(0)
+    sv = np.linalg.svd(pts, compute_uv=False)
+    return float(sv[-1] / np.sqrt(len(pts))) > tol_mm
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +199,7 @@ class SoftVis:
         return SoftVis(*[float(x) for x in v])
 
 
-def marker_probs(oriented, pose, K, dist, sv, occlusion=True, size_mm=MARKER_MM):
+def marker_probs(oriented, pose, K, dist, sv, occlusion=True, size_mm=MARKER_MM, occluders=()):
     rvec, tvec = pose
     R, _ = cv2.Rodrigues(rvec)
     cam = -R.T @ tvec.ravel()
@@ -137,6 +216,8 @@ def marker_probs(oriented, pose, K, dist, sv, occlusion=True, size_mm=MARKER_MM)
         if occlusion and ray_intersects_cylinder(
                 c + n * 0.5, to_cam, PHANTOM_CYLINDER_CENTER_XY, PHANTOM_CYLINDER_RADIUS_MM,
                 PHANTOM_CYLINDER_Z_MIN, PHANTOM_CYLINDER_Z_MAX):
+            continue
+        if occluders and blocked(c + n * 0.5, to_cam, occluders):
             continue
         theta = np.degrees(np.arccos(min(cosang, 1.0)))
         w = f * size_mm / z * cosang
@@ -177,7 +258,7 @@ def simulate(oriented, ids, targets, pose, K, dist, sigma_px, n_trials=400, seed
     e3, ei, rms = [], [], []
     for _ in range(n_trials):
         noisy = (clean + rng.normal(0.0, sigma_px, clean.shape)).astype(np.float32)
-        ok, rv, tv = cv2.solvePnP(corners3d, noisy, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
+        ok, rv, tv = cv2.solvePnP(corners3d, noisy, K, dist, flags=PNP_FLAG)
         if not ok:
             continue
         Re, _ = cv2.Rodrigues(rv)
@@ -411,79 +492,179 @@ def cmd_fit(a):
 
 
 # ---------------------------------------------------------------------------
-# design: V0-V3 comparison
+# design / tilt: variant comparison
 # ---------------------------------------------------------------------------
+def pose_grid(a):
+    return [(e, az) for e in a.elevs for az in np.arange(0, 360, a.az_step)]
+
+
+def select_variants(a):
+    """Variants whose name contains any of the --variants substrings (all if none given)."""
+    if not a.variants:
+        return dict(VARIANTS_ORIENTED)
+    return {n: v for n, v in VARIANTS_ORIENTED.items() if any(s in n for s in a.variants)}
+
+
+def score_variant(ori, a, K, dist, targets, vis, sv, poses, size_mm, sigmas):
+    """One record per camera pose: visible markers, gate, coplanarity, MC and Fitzpatrick TRE."""
+    recs = []
+    for e, az in poses:
+        pose = make_camera_pose(a.distance, e, az)
+        ids = visible_ids(ori, pose, K, dist, vis, size_mm=size_mm)
+        rec = {"el": e, "az": float(az), "n": len(ids), "ok": len(ids) >= a.gate,
+               "noncop": noncoplanar(ori, ids, size_mm),
+               "p": marker_probs(ori, pose, K, dist, sv, size_mm=size_mm)}
+        if rec["ok"]:
+            for key, sig in sigmas.items():
+                r = simulate(ori, ids, targets, pose, K, dist, sig, a.trials, size_mm=size_mm)
+                rec["mc_" + key] = r["tre3_rms"].mean()
+                if key == "hi":
+                    rec["ov_hi"] = r["ov_rms"].mean()
+                    rec["mc_worst"] = r["tre3_rms"].max()
+            fz = fitz(ori, ids, targets)
+            rec["fitz"] = None if fz is None else fz.mean()
+            rec["fitz_max"] = None if fz is None else fz.max()
+        recs.append(rec)
+    return recs
+
+
+def hands_check(ori, a, K, dist, targets, vis, poses, size_mm, side):
+    """Surgeon on `side`, camera on the same side. For every (pose, target) pair, put the hand
+    stand-in over that target and count markers. Returns (cases, ok without hands, ok with hands,
+    mean markers lost)."""
+    sgn = 1.0 if side == "left" else -1.0
+    own = [(e, az) for e, az in poses if sgn * np.sin(np.radians(az)) > 0.2]
+    n_case = ok0 = ok1 = 0
+    lost = []
+    for e, az in own:
+        pose = make_camera_pose(a.distance, e, az)
+        base = visible_ids(ori, pose, K, dist, vis, size_mm=size_mm)
+        for t in targets:
+            occ = hand_occluders(t, side)
+            ids = visible_ids(ori, pose, K, dist, vis, size_mm=size_mm, occluders=occ)
+            n_case += 1
+            ok0 += len(base) >= a.gate
+            ok1 += len(ids) >= a.gate
+            lost.append(len(base) - len(ids))
+    return n_case, ok0, ok1, (float(np.mean(lost)) if lost else float("nan"))
+
+
+def _m(recs, k):
+    v = [r[k] for r in recs if r.get(k) is not None]
+    return float(np.mean(v)) if v else float("nan")
+
+
 def cmd_design(a):
     K, dist = load_cal(a.calibration)
     targets, _ = load_pedicles_from_json(a.targets)
     vis = Vis(a.max_angle, a.min_width, a.margin)
-    elevs = [10, 20, 30, 40, 50]
-    azs = list(range(0, 360, 45))
-    sig_lo, sig_hi = a.sigma_static, a.sigma_live
-    print(f"{len(elevs) * len(azs)}-pose sweep at {a.distance:.0f} mm, entry targets ({len(targets)}), "
-          f"gate {a.gate} markers, visibility {vis.max_angle_deg:.0f} deg / {vis.min_width_px:.0f} px / margin {vis.margin_px:.0f}")
-    print(f"noise: static {sig_lo} px and live {sig_hi} px per axis; {a.trials} trials per pose\n")
-    res = {n: [] for n in VARIANTS_ORIENTED}
-    n_face_a = {"V0_baseline": 0, "V1_primary": 3, "V2_clustered": 3, "V3_8marker": 4}
-    counts = {n: [] for n in VARIANTS_ORIENTED}
-    soft = {n: [] for n in VARIANTS_ORIENTED}
     sv = soft_from_args(a)
-    for e in elevs:
-        for az in azs:
-            pose = make_camera_pose(a.distance, e, az)
-            for name, ori in VARIANTS_ORIENTED.items():
-                ids = visible_ids(ori, pose, K, dist, vis)
-                counts[name].append(len(ids))
-                soft[name].append(marker_probs(ori, pose, K, dist, sv))
-                nA = n_face_a[name]
-                both = nA > 0 and any(i < nA for i in ids) and any(i >= nA for i in ids)
-                rec = {"el": e, "az": az, "n": len(ids), "ok": len(ids) >= a.gate, "both": both}
-                if rec["ok"]:
-                    lo = simulate(ori, ids, targets, pose, K, dist, sig_lo, a.trials)
-                    hi = simulate(ori, ids, targets, pose, K, dist, sig_hi, a.trials)
-                    fz = fitz(ori, ids, targets)
-                    rec.update({"mc_lo": lo["tre3_rms"].mean(), "mc_hi": hi["tre3_rms"].mean(),
-                                "ov_hi": hi["ov_rms"].mean(), "fitz": None if fz is None else fz.mean(),
-                                "fitz_max": None if fz is None else fz.max()})
-                res[name].append(rec)
-    print(f"{'variant':<14s}{'poses ok':>9s}{'MC static':>11s}{'MC live':>9s}{'overlay live':>14s}{'Fitzpatrick':>13s}   (mean TRE over successful poses, mm)")
+    poses = pose_grid(a)
+    variants = select_variants(a)
+    print(f"{len(poses)}-pose sweep at {a.distance:.0f} mm (elevations {a.elevs}, azimuth step {a.az_step} deg), "
+          f"{a.marker_mm:.0f} mm markers, entry targets ({len(targets)}), gate {a.gate} markers, "
+          f"visibility {vis.max_angle_deg:.0f} deg / {vis.min_width_px:.0f} px / margin {vis.margin_px:.0f}")
+    print(f"noise: static {a.sigma_static} px and live {a.sigma_live} px per axis; {a.trials} trials per pose\n")
+    res = {n: score_variant(ori, a, K, dist, targets, vis, sv, poses, a.marker_mm,
+                            {"lo": a.sigma_static, "hi": a.sigma_live})
+           for n, ori in variants.items()}
+
+    print(f"{'variant':<19s}{'N':>3s}{'poses ok':>10s}{'MC static':>11s}{'MC live':>9s}{'overlay live':>14s}{'Fitzpatrick':>13s}"
+          f"   (mean TRE over successful poses, mm)")
+    for name, recs in res.items():
+        ok = [r for r in recs if r["ok"]]
+        nm = len(variants[name])
+        if not ok:
+            print(f"{name:<19s}{nm:>3d}{0:>7d}/{len(recs)}{'-':>11s}{'-':>9s}{'-':>14s}{'-':>13s}")
+            continue
+        print(f"{name:<19s}{nm:>3d}{len(ok):>7d}/{len(recs)}{_m(ok, 'mc_lo'):>11.3f}{_m(ok, 'mc_hi'):>9.3f}"
+              f"{_m(ok, 'ov_hi'):>14.3f}{_m(ok, 'fitz'):>13.3f}")
+
+    print(f"\nPoses tracked (out of {len(poses)}) as a function of the minimum-marker gate (hard limits | expected value, soft model):")
+    print(f"{'variant':<19s}" + "".join(f"{'gate ' + str(g):>9s}" for g in (2, 3, 4, 5, 6)) + "   |"
+          + "".join(f"{'gate ' + str(g):>9s}" for g in (2, 3, 4, 5, 6)))
+    for name, recs in res.items():
+        print(f"{name:<19s}" + "".join(f"{sum(r['n'] >= g for r in recs):>9d}" for g in (2, 3, 4, 5, 6)) + "   |"
+              + "".join(f"{sum(p_at_least(r['p'], g) for r in recs):>9.1f}" for g in (2, 3, 4, 5, 6)))
+
+    print(f"\nWhere each variant tracks (gate {a.gate}): non-coplanar marker set vs a single plane, "
+          f"and poses whose worst target is predicted under 2 mm")
     for name, recs in res.items():
         ok = [r for r in recs if r["ok"]]
         if not ok:
-            print(f"{name:<14s}{0:>6d}/{len(recs)}{'-':>11s}{'-':>9s}{'-':>14s}{'-':>13s}")
             continue
-        m = lambda k: np.mean([r[k] for r in ok if r.get(k) is not None])
-        print(f"{name:<14s}{len(ok):>6d}/{len(recs)}{m('mc_lo'):>11.3f}{m('mc_hi'):>9.3f}{m('ov_hi'):>14.3f}{m('fitz'):>13.3f}")
-    print("\nPoses tracked (out of %d) as a function of the minimum-marker gate (hard limits | expected value, soft model):" % (len(elevs) * len(azs)))
-    print(f"{'variant':<14s}" + "".join(f"{'gate ' + str(g):>9s}" for g in (2, 3, 4, 5)) + "   |" + "".join(f"{'gate ' + str(g):>9s}" for g in (2, 3, 4, 5)))
-    for name, cs in counts.items():
-        print(f"{name:<14s}" + "".join(f"{sum(c >= g for c in cs):>9d}" for g in (2, 3, 4, 5)) + "   |"
-              + "".join(f"{sum(p_at_least(p, g) for p in soft[name]):>9.1f}" for g in (2, 3, 4, 5)))
-    print("\nWhere each variant tracks (gate %d): both faces visible vs a single face" % a.gate)
-    for name, recs in res.items():
-        ok = [r for r in recs if r["ok"]]
-        if ok:
-            nb = sum(r["both"] for r in ok)
-            acc = [r for r in ok if r.get("fitz_max") is not None and r["fitz_max"] < 2.0]
-            nba = sum(r["both"] for r in acc)
-            print(f"  {name:<14s} both faces {nb:>2d}, single face {len(ok) - nb:>2d}   |  worst-target predicted TRE < 2 mm: "
-                  f"{len(acc):>2d} poses ({nba} both faces, {len(acc) - nba} single face)")
-    # V3 vs V1 on common poses
-    c = [(r1, r3) for r1, r3 in zip(res["V1_primary"], res["V3_8marker"]) if r1["ok"] and r3["ok"]]
-    if c:
-        lower = sum(r3["mc_hi"] < r1["mc_hi"] for r1, r3 in c)
-        rel = np.array([(r1["mc_hi"] - r3["mc_hi"]) / r1["mc_hi"] for r1, r3 in c]) * 100
-        print(f"\nV3 vs V1 on the {len(c)} poses where both track: V3 lower at {lower}/{len(c)}, "
-              f"{np.percentile(rel, 10):.0f} to {np.percentile(rel, 90):.0f}% lower (10th to 90th percentile)")
+        nb = sum(r["noncop"] for r in ok)
+        acc = [r for r in ok if r.get("fitz_max") is not None and r["fitz_max"] < 2.0]
+        hi_el = [r for r in recs if r["el"] >= 60]
+        print(f"  {name:<19s} non-coplanar {nb:>3d}, coplanar {len(ok) - nb:>3d}  |  worst < 2 mm: {len(acc):>3d}  |  "
+              f"tracked at elevation >= 60: {sum(r['ok'] for r in hi_el)}/{len(hi_el)}")
+
+    if "V1_primary" in res and "V3_8marker" in res:
+        c = [(r1, r3) for r1, r3 in zip(res["V1_primary"], res["V3_8marker"]) if r1["ok"] and r3["ok"]]
+        if c:
+            lower = sum(r3["mc_hi"] < r1["mc_hi"] for r1, r3 in c)
+            rel = np.array([(r1["mc_hi"] - r3["mc_hi"]) / r1["mc_hi"] for r1, r3 in c]) * 100
+            print(f"\nV3 vs V1 on the {len(c)} poses where both track: V3 lower at {lower}/{len(c)}, "
+                  f"{np.percentile(rel, 10):.0f} to {np.percentile(rel, 90):.0f}% lower (10th to 90th percentile)")
+
+    if a.hands != "none":
+        sides = ["left", "right"] if a.hands == "both" else [a.hands]
+        print(f"\nHand stand-in (box hand plus capsule forearm) over each target in turn; camera on the surgeon's side; gate {a.gate}")
+        print(f"{'variant':<19s}{'surgeon':>9s}{'cases':>7s}{'ok, no hands':>14s}{'ok, hands':>11s}{'markers lost':>14s}")
+        for name in res:
+            for side in sides:
+                n_case, ok0, ok1, lost = hands_check(variants[name], a, K, dist, targets, vis, poses, a.marker_mm, side)
+                if n_case:
+                    print(f"{name:<19s}{side:>9s}{n_case:>7d}{100 * ok0 / n_case:>13.0f}%{100 * ok1 / n_case:>10.0f}%{lost:>14.2f}")
+
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["variant", "elev", "az", "n_visible", "tracked", "mc_static_mm", "mc_live_mm", "overlay_live_mm", "fitzpatrick_mm"])
+        w.writerow(["variant", "n_markers", "elev", "az", "n_visible", "tracked", "noncoplanar",
+                    "mc_static_mm", "mc_live_mm", "overlay_live_mm", "fitzpatrick_mm", "fitzpatrick_worst_mm"])
         for name, recs in res.items():
             for r in recs:
-                w.writerow([name, r["el"], r["az"], r["n"], int(r["ok"]),
-                            *(f"{r[k]:.4f}" if r.get(k) is not None else "" for k in ("mc_lo", "mc_hi", "ov_hi", "fitz"))])
+                w.writerow([name, len(variants[name]), r["el"], r["az"], r["n"], int(r["ok"]), int(r["noncop"]),
+                            *(f"{r[k]:.4f}" if r.get(k) is not None else ""
+                              for k in ("mc_lo", "mc_hi", "ov_hi", "fitz", "fitz_max"))])
+    print(f"Saved {out}")
+
+
+def cmd_tilt(a):
+    K, dist = load_cal(a.calibration)
+    targets, _ = load_pedicles_from_json(a.targets)
+    vis = Vis(a.max_angle, a.min_width, a.margin)
+    sv = soft_from_args(a)
+    poses = pose_grid(a)
+    configs = [c for c in DOME_CONFIGS if not a.configs or any(s in c for s in a.configs)]
+    print(f"Tilt sweep: {len(poses)} poses at {a.distance:.0f} mm, {a.marker_mm:.0f} mm markers, gate {a.gate}, "
+          f"live noise {a.sigma_live} px, {a.trials} trials per pose\n")
+    print(f"{'config':<19s}{'tilt':>5s}{'N':>4s}{'tracked':>9s}{'non-copl':>10s}{'worst<2':>9s}{'el>=60':>8s}"
+          f"{'expected@gate':>15s}{'MC live':>9s}{'Fitz worst':>12s}")
+    rows = []
+    for cfg in configs:
+        for t in a.tilts:
+            ori = build_dome(cfg, tilt_deg=t)
+            recs = score_variant(ori, a, K, dist, targets, vis, sv, poses, a.marker_mm, {"hi": a.sigma_live})
+            ok = [r for r in recs if r["ok"]]
+            acc = sum(1 for r in ok if r.get("fitz_max") is not None and r["fitz_max"] < 2.0)
+            hi_el = [r for r in recs if r["el"] >= 60]
+            row = {"config": cfg, "tilt": t, "N": len(ori), "tracked": len(ok),
+                   "noncop": sum(r["noncop"] for r in ok), "worst_lt2": acc,
+                   "el60": sum(r["ok"] for r in hi_el), "el60_n": len(hi_el),
+                   "expected": sum(p_at_least(r["p"], a.gate) for r in recs),
+                   "mc_live": _m(ok, "mc_hi"), "fitz_worst": _m(ok, "fitz_max")}
+            rows.append(row)
+            print(f"{cfg:<19s}{t:>5.0f}{row['N']:>4d}{len(ok):>5d}/{len(recs):<3d}{row['noncop']:>10d}{acc:>9d}"
+                  f"{row['el60']:>4d}/{row['el60_n']:<3d}{row['expected']:>15.1f}{row['mc_live']:>9.3f}{row['fitz_worst']:>12.3f}")
+        print()
+    out = Path(a.out_tilt)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
     print(f"Saved {out}")
 
 
@@ -689,7 +870,7 @@ def cmd_fle(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["fit", "design", "atp4", "atp2", "fle", "figs"])
+    ap.add_argument("cmd", choices=["fit", "design", "tilt", "atp4", "atp2", "fle", "figs"])
     d = "data/atp/"
     ap.add_argument("--calibration", default="data/calibration/s22_ultra_v1/camera_calibration.npz")
     ap.add_argument("--targets", default="annotations/pedicle_entry_targets.json")
@@ -723,8 +904,19 @@ def main():
                     help="atp2: use the single --live-rms for every shot instead of each shot's own RMS")
     ap.add_argument("--trials", type=int, default=400)
     ap.add_argument("--out", default="results/tre_analysis/design_sweep.csv")
+    ap.add_argument("--out-tilt", default="results/tre_analysis/tilt_sweep.csv")
+    ap.add_argument("--marker-mm", type=float, default=MARKER_MM, help="design/tilt: marker edge length (mm)")
+    ap.add_argument("--elevs", type=float, nargs="+", default=[10, 20, 30, 40, 50, 60, 70],
+                    help="design/tilt: camera elevations (deg)")
+    ap.add_argument("--az-step", type=float, default=45.0, help="design/tilt: azimuth step (deg)")
+    ap.add_argument("--variants", nargs="*", default=None,
+                    help="design: only variants whose name contains one of these strings (e.g. V3 D)")
+    ap.add_argument("--configs", nargs="*", default=None, help="tilt: only these DOME_CONFIGS (substrings)")
+    ap.add_argument("--tilts", type=float, nargs="+", default=[15, 20, 25, 30, 35, 40, 45], help="tilt: angles (deg)")
+    ap.add_argument("--hands", choices=["none", "left", "right", "both"], default="none",
+                    help="design: hand stand-in occlusion check for a surgeon on this side")
     a = ap.parse_args()
-    {"fit": cmd_fit, "design": cmd_design, "atp4": cmd_atp4, "atp2": cmd_atp2, "fle": cmd_fle, "figs": cmd_figs}[a.cmd](a)
+    {"fit": cmd_fit, "design": cmd_design, "tilt": cmd_tilt, "atp4": cmd_atp4, "atp2": cmd_atp2, "fle": cmd_fle, "figs": cmd_figs}[a.cmd](a)
 
 
 if __name__ == "__main__":
