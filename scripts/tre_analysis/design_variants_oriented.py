@@ -124,7 +124,7 @@ DOME_CONFIGS = {
                           dict(centre=(10, 90, +90), ring_r=40, n_ring=3, arc_deg=180, arc_mid_deg=+90)],
     "D6_split_half_low": [dict(centre=(10, 40, -95), ring_r=40, n_ring=4, arc_deg=180, arc_mid_deg=-90),
                           dict(centre=(10, 40, +90), ring_r=40, n_ring=4, arc_deg=180, arc_mid_deg=+90)],
-    "D1_final":   [dict(centre=(110, 90, 0), ring_r=50, n_ring=6, tilt_deg=5)]
+    "D1_final": [dict(centre=(120, 105, 0), ring_r=50, n_ring=6, tilt_deg=5, arc_mid_deg=30)]
 }
 DOME_TILT_DEG = 5.0
 
