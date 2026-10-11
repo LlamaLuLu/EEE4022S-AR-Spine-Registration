@@ -132,15 +132,24 @@ def panel(frame, x, y, w, h, accent=ACCENT):
 # Overlay elements
 # ====================================================================
 
-def draw_crosshair(frame, cx, cy, sz=5, col=TEXT_PRIMARY):
+def draw_crosshair(frame, cx, cy, sz=5, col=TEXT_PRIMARY, outline=True,
+                   outline_col=(0, 0, 0)):
+    """Crosshair with a thin outline so it stays visible on any background."""
     cx, cy = int(cx), int(cy)
+    if outline:
+        cv2.line(frame, (cx - sz - 1, cy), (cx + sz + 1, cy), outline_col, 3, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy - sz - 1), (cx, cy + sz + 1), outline_col, 3, cv2.LINE_AA)
     cv2.line(frame, (cx - sz, cy), (cx + sz, cy), col, 1, cv2.LINE_AA)
     cv2.line(frame, (cx, cy - sz), (cx, cy + sz), col, 1, cv2.LINE_AA)
 
 
 def draw_targets(frame, targets_mm, labels, tre_vals, rvec, tvec,
                  K, D, vis_ids, corner_lut, fle, in_env, tr,
-                 show_ell=True, doff=0):
+                 show_ell=True, doff=0, marker_col=None):
+    """
+    marker_col: if given (BGR), the crosshair / dot itself is drawn in this colour
+    (with a contrasting outline); ellipses and labels keep the TRE status colour.
+    """
     pts, _ = cv2.projectPoints(targets_mm.astype(np.float64), rvec, tvec, K, D)
     pts = pts.reshape(-1, 2)
     sz = max(4, int(tr.h * 0.007))
@@ -148,7 +157,14 @@ def draw_targets(frame, targets_mm, labels, tre_vals, rvec, tvec,
     for i, (pt, lbl, tre) in enumerate(zip(pts, labels, tre_vals)):
         col = tre_colour(tre, in_env)
         cx, cy = pt[0], pt[1] - doff
-        draw_crosshair(frame, cx, cy, sz, col)
+        mcol = marker_col if marker_col is not None else col
+        rim = (255, 255, 255) if sum(mcol) < 300 else (0, 0, 0)   # contrast outline
+        if "_E_" in lbl:
+            draw_crosshair(frame, cx, cy, sz, mcol, True, rim)  # entry point: crosshair
+        else:
+            r = max(2, int(sz * 0.5))                           # isthmus: small filled dot
+            cv2.circle(frame, (int(cx), int(cy)), r + 1, rim, -1, cv2.LINE_AA)
+            cv2.circle(frame, (int(cx), int(cy)), r, mcol, -1, cv2.LINE_AA)
 
         if show_ell and np.isfinite(tre):
             cov = compute_tre_covariance(vis_ids, corner_lut, targets_mm[i], fle)
@@ -384,7 +400,7 @@ def draw_target_radar(frame, tr, tre_vals, labels, in_env, x, y, w, h):
 
 def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
              dist_mm, elev, az, in_env, state, tre_vals, labels,
-             countdown, show_help=False, show_wire=True):
+             countdown, show_help=False, show_wire=True, gate=4):
     h, w = frame.shape[:2]
     pad = max(int(h * 0.015), 8)
     row_h = max(int(h * 0.045), 22)
@@ -396,7 +412,7 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
     panel(frame, pad, pad, pw, ph, _state_col(state))
     x0, y0 = pad + p, pad + p
 
-    mcol = COL_GOOD if n_markers >= 4 else COL_BAD
+    mcol = COL_GOOD if n_markers >= gate else COL_BAD
     dy = _row(tr, frame, x0, y0, "MARKERS", f"{n_markers}/{n_total}", mcol)
 
     pnp_str = "OK" if pnp_ok else "FAIL"

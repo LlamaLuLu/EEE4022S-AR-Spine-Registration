@@ -29,8 +29,8 @@ import cv2
 import numpy as np
 
 from ar_board import (
-    ARUCO_DICT, build_corner_lut, load_marker_map,
-    multi_marker_pnp, decompose_pose,
+    ARUCO_DICT, build_corner_lut, load_marker_map, 
+    load_corner_lut, multi_marker_pnp, decompose_pose,
     DEFAULT_MARKER_SIZE_MM, MIN_MARKERS_PNP,
 )
 from ar_tre import compute_tre_scalar, DEFAULT_FLE_MM
@@ -75,13 +75,13 @@ def main():
     D = calib["dist_coeffs"]
 
     # --- Board geometry ---
-    if args.marker_map:
-        slot_to_id = load_marker_map(args.marker_map)
-        print(f"Loaded marker map: {slot_to_id}")
-    else:
-        slot_to_id = list(range(8))
-    corner_lut = build_corner_lut(slot_to_id=slot_to_id)
-    n_total = len(slot_to_id)
+    corner_lut = load_corner_lut(args.marker_map)
+    n_total = len(corner_lut)
+    print(f"Board: {corner_lut.source or 'default V3'} | "
+          f"IDs {sorted(corner_lut)}, gate {corner_lut.min_markers}, "
+          f"{corner_lut.marker_size_mm:g} mm")
+
+    is_v3 = set(corner_lut) <= set(range(8))
 
     # --- Targets ---
     target_pts, target_labels, traj_pairs = load_targets(args.isthmus, args.entry)
@@ -179,7 +179,7 @@ def main():
                 prev_rvec, prev_tvec = rvec.copy(), tvec.copy()
                 last_good_time = now
                 cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                in_env = is_in_envelope(elev_deg, az_deg)
+                in_env = is_in_envelope(elev_deg, az_deg) if is_v3 else True
                 visible_ids = [m for m in ids.flatten() if m in corner_lut]
                 tre_values = compute_tre_scalar(visible_ids, corner_lut,
                                                 target_pts, args.fle)
@@ -195,7 +195,7 @@ def main():
                     state = "STALE"
                 rvec, tvec = prev_rvec, prev_tvec
                 cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                in_env = is_in_envelope(elev_deg, az_deg)
+                in_env = is_in_envelope(elev_deg, az_deg) if is_v3 else False
                 tre_values = compute_tre_scalar(visible_ids, corner_lut,
                                                 target_pts, args.fle)
             else:
@@ -231,7 +231,7 @@ def main():
             draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
                      distance_mm, elev_deg, az_deg, in_env,
                      state, tre_values, target_labels, countdown,
-                     show_help, show_wire)
+                     show_help, show_wire, gate=corner_lut.min_markers)
 
         # --- Axis triad (LPS orientation gizmo, top-right below pose panel) ---
         if show_triad and pnp_ok and state != "SEARCHING":

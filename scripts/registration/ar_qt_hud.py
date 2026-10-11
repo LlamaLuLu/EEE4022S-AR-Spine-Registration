@@ -105,9 +105,10 @@ class StatusPanel(HudPanel):
     Accent bar colour reflects overall state (searching/verifying/etc).
     """
 
-    def __init__(self, n_total=8, parent=None):
+    def __init__(self, n_total=8, gate=4, parent=None):
         super().__init__(parent)
         self.n_total = n_total
+        self.gate = gate
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -145,7 +146,7 @@ class StatusPanel(HudPanel):
         if self._last["markers"] != m_str:
             self._markers_val.setText(m_str)
             self._set_status(self._markers_val,
-                             "good" if n_markers >= 4 else "bad")
+                             "good" if n_markers >= self.gate else "bad")
             self._last["markers"] = m_str
 
         # PnP
@@ -415,6 +416,7 @@ class ShortcutsPanel(QFrame):
         ("f", "fullscreen"),
         ("s", "screenshot"),
         ("n", "next step"),
+        ("p", "print marker residuals"),
         ("esc", "toggle help"),
         ("q", "quit"),
     ]
