@@ -31,6 +31,7 @@ import threading
 from pathlib import Path
 
 import cv2
+from replay_source import ReplayCapture, is_replay_source
 import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, QSize
@@ -91,6 +92,8 @@ ROTATE_MAP = {0: None, 90: cv2.ROTATE_90_CLOCKWISE,
 
 
 def open_source(source):
+    if is_replay_source(source):
+        return ReplayCapture(source)
     try:
         return cv2.VideoCapture(int(source))
     except ValueError:
@@ -931,6 +934,8 @@ class ARWindow(QMainWindow):
             self._step_focus(+1)
         elif k in (Qt.Key_Left, Qt.Key_Up) or text == "[":
             self._step_focus(-1)
+        elif text in (",", ".") and isinstance(self.grabber.cap, ReplayCapture):
+            print("Replay:", self.grabber.cap.step(-1 if text == "," else +1))
         elif text == "d":
             self.detach = not self.detach
         elif text == "g":
