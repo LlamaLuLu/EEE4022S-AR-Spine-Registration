@@ -47,7 +47,7 @@ for sub in ("registration", "tre_analysis"):
         sys.path.insert(0, p)
 
 from ar_targets import load_targets            # noqa: E402
-from ar_board import build_corner_lut, load_marker_map   # noqa: E402
+from ar_board import load_corner_lut   # noqa: E402
 from ar_theme import envelope_tier                       # noqa: E402
 
 try:
@@ -265,8 +265,7 @@ def main():
     sel = [i for i, l in enumerate(labels) if args.labels in l]
     print(f"{len(shots)} screenshot(s), {len(sel)} target(s) matching '{args.labels}'")
 
-    slot_to_id = load_marker_map(args.marker_map) if Path(args.marker_map).exists() else list(range(8))
-    lut = build_corner_lut(slot_to_id=slot_to_id)
+    lut = load_corner_lut(args.marker_map if Path(args.marker_map).exists() else None)
     marker_centroid = np.mean([c.mean(axis=0) for c in lut.values()], axis=0)
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

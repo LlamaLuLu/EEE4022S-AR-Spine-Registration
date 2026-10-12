@@ -18,6 +18,7 @@ Subcommands
   atp4     marker-set study: MC vs Fitzpatrick vs the ATP-4 measurements
   atp2     error budget: MC overlay error at the ATP-2 poses vs measured error
   fle      check the MC noise path against the static single-marker FLE
+  predict  expected markers and P(PnP) for the planned ATP-3 poses of any variant (no refit)
 
 Usage (from repo root; paths shown are the defaults):
   python scripts/tre_analysis/mc_validation.py fit
@@ -27,6 +28,14 @@ Usage (from repo root; paths shown are the defaults):
   python scripts/tre_analysis/mc_validation.py atp4
   python scripts/tre_analysis/mc_validation.py atp2 --poses "data/screenshots/atp2_crisp/shot_*_pose.json" \
         --measured data/atp/atp2_crisp.csv
+
+Other marker arrays (atp2, atp4, fit, predict). The default is the V3 L-bracket. For the as-built dome:
+  python scripts/tre_analysis/mc_validation.py atp2 --marker-map data/dome_markers/marker_map.json \
+        --poses "data/screenshots/atp2_v2/shot_*_pose.json" --measured data/atp_v2/atp2_dome.csv
+  python scripts/tre_analysis/mc_validation.py predict --marker-map data/dome_markers/marker_map.json
+--marker-map reads the marker size, the gate and the real marker poses (including the hand-calibrated offsets)
+from the JSON the live overlay uses. --variant NAME picks a design_variants_oriented entry instead.
+Visibility parameters stay at the V3 fit: apply them to the dome without refitting, then compare.
 """
 
 import argparse
@@ -62,7 +71,6 @@ IMG_W, IMG_H = 1920, 1080
 MARKER_MM = 20.0
 GATE = 4                      # live pipeline: MIN_MARKERS_PNP
 FLE_FITZ_MM = 0.8             # Fitzpatrick input used in the pipeline
-PNP_FLAG = cv2.SOLVEPNP_SQPNP
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +266,7 @@ def simulate(oriented, ids, targets, pose, K, dist, sigma_px, n_trials=400, seed
     e3, ei, rms = [], [], []
     for _ in range(n_trials):
         noisy = (clean + rng.normal(0.0, sigma_px, clean.shape)).astype(np.float32)
-        ok, rv, tv = cv2.solvePnP(corners3d, noisy, K, dist, flags=PNP_FLAG)
+        ok, rv, tv = cv2.solvePnP(corners3d, noisy, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
         if not ok:
             continue
         Re, _ = cv2.Rodrigues(rv)
@@ -284,6 +292,48 @@ def fitz(oriented, ids, targets, fle=FLE_FITZ_MM):
     if predict_tre is None or len(ids) < 3:
         return None
     return predict_tre(np.array([oriented[i][0] for i in ids]), targets, fle)
+
+
+def oriented_from_map(path):
+    """Markers of a live marker_map.json as (centre, R) tuples, with the map's own corner order.
+    Returns (oriented, aruco_ids, marker_mm, gate)."""
+    m = json.load(open(path))
+    ori, ids = [], []
+    for sl in m["slots"]:
+        c = np.asarray(sl["corners_mm"], float)            # TL, TR, BR, BL
+        x = c[1] - c[0]; y = c[0] - c[3]
+        x /= np.linalg.norm(x); y /= np.linalg.norm(y)
+        z = np.cross(x, y)
+        R = np.column_stack([x, y, z])
+        n = np.asarray(sl.get("normal", z), float)
+        if float(n @ z) < 0.99:
+            sys.exit(f"marker {sl['aruco_id']}: corner order gives a normal that disagrees with the map's normal")
+        ori.append((c.mean(0), R)); ids.append(int(sl["aruco_id"]))
+    size = float(m.get("marker_size_mm", MARKER_MM))
+    for (cen, R), sl in zip(ori, m["slots"]):             # the rebuilt corners must reproduce the map
+        err = np.abs(corners_from_oriented_marker(cen, R, size) - np.asarray(sl["corners_mm"], float)).max()
+        if err > 0.05:
+            sys.exit(f"marker {sl['aruco_id']}: rebuilt corners differ from the map by {err:.2f} mm")
+    return ori, ids, size, int(m.get("min_markers_pnp", GATE))
+
+
+def resolve_variant(a):
+    """Set a.oriented, a.size_mm, a.gate_eff, a.ids, a.vname from --marker-map / --variant (default V3)."""
+    a.is_v3 = False
+    if a.marker_map:
+        a.oriented, a.ids, a.size_mm, g = oriented_from_map(a.marker_map)
+        a.vname = Path(a.marker_map).parent.name or "marker map"
+        a.gate_eff = a.gate if a.gate is not None else g
+    else:
+        name = a.variant or "V3_8marker"
+        if name not in VARIANTS_ORIENTED:
+            sys.exit(f"unknown variant {name}; choose from {', '.join(VARIANTS_ORIENTED)} or use --marker-map")
+        a.oriented, a.vname = VARIANTS_ORIENTED[name], name
+        a.ids = list(range(len(a.oriented)))
+        a.size_mm = a.marker_mm
+        a.gate_eff = a.gate if a.gate is not None else GATE
+        a.is_v3 = a.oriented is V3_ORIENTED
+    return a
 
 
 def load_cal(path):
@@ -330,9 +380,9 @@ def load_atp3(paths, elev_drop=()):
     return rows
 
 
-def n_visible_at(oriented, d, e, a, K, dist, vis):
+def n_visible_at(oriented, d, e, a, K, dist, vis, size_mm=MARKER_MM):
     pose = make_camera_pose(d, e, a)
-    return len(visible_ids(oriented, pose, K, dist, vis))
+    return len(visible_ids(oriented, pose, K, dist, vis, size_mm=size_mm))
 
 
 def cross50(x, y, lo, hi, falling, level=50.0):
@@ -365,8 +415,9 @@ def measured_boundaries(rows):
     return out
 
 
-def simulated_boundaries(K, dist, vis):
-    nv = lambda d, e, a: n_visible_at(V3_ORIENTED, d, e, a, K, dist, vis)
+def simulated_boundaries(K, dist, vis, ori=V3_ORIENTED, gate=GATE, size_mm=MARKER_MM):
+    GATE = gate
+    nv = lambda d, e, a: n_visible_at(ori, d, e, a, K, dist, vis, size_mm)
     azs = np.arange(0, 360, 1.0)
     n = np.array([nv(450, 33, x) for x in azs])
     out = {
@@ -393,9 +444,9 @@ def curve_cross(xs, ys, level, falling):
     return np.nan
 
 
-def soft_boundaries(K, dist, sv):
-    pt = lambda d, e, a: p_at_least(marker_probs(V3_ORIENTED, make_camera_pose(d, e, a), K, dist, sv), GATE)
-    en = lambda d, e, a: marker_probs(V3_ORIENTED, make_camera_pose(d, e, a), K, dist, sv).sum()
+def soft_boundaries(K, dist, sv, ori=V3_ORIENTED, gate=GATE, size_mm=MARKER_MM):
+    pt = lambda d, e, a: p_at_least(marker_probs(ori, make_camera_pose(d, e, a), K, dist, sv, size_mm=size_mm), gate)
+    en = lambda d, e, a: marker_probs(ori, make_camera_pose(d, e, a), K, dist, sv, size_mm=size_mm).sum()
     azs = np.arange(0, 360, 1.0)
     pa = np.array([pt(450, 33, x) for x in azs]); na = np.array([en(450, 33, x) for x in azs])
     out = {
@@ -418,6 +469,9 @@ def soft_from_args(a):
 
 
 def cmd_fit(a):
+    if not a.is_v3:
+        sys.exit("fit refits the visibility model on the V3 ATP-3 data, so it only runs for V3. "
+                 "For another array use `predict` (no refit), then compare with its own ATP-3 summaries.")
     try:
         from scipy.optimize import least_squares
     except ImportError:
@@ -681,6 +735,8 @@ ATP4_SETS = {   # step -> (sequence, covered-markers set after that step)
 
 
 def cmd_atp4(a):
+    if not a.is_v3:
+        sys.exit("atp4 uses the V3 covered-marker sequences (ATP4_SETS), so it only runs for V3.")
     K, dist = load_cal(a.calibration)
     targets, labels = load_pedicles_from_json(a.targets)
     rows = {int(float(r["step"])): r for r in read_csv(a.atp4)}
@@ -722,7 +778,9 @@ def budget(a, K, dist, targets, labels, poses_glob, measured_csv, live_rms):
     lab_idx = {l: i for i, l in enumerate(labels)}
     meas = read_csv(measured_csv)
     poses = {Path(f).name.replace("_pose.json", ""): json.load(open(f)) for f in glob.glob(poses_glob)}
-    sig_live = a.sigma if a.sigma else sigma_for_rms(live_rms, 8)
+    ori, size, gate = a.oriented, a.size_mm, a.gate_eff
+    sig_live = a.sigma if a.sigma else sigma_for_rms(live_rms, len(ori))
+    id2idx = {v: i for i, v in enumerate(a.ids)}
     cache, out, sig_used = {}, [], []
     for r in meas:
         shot = r["shot"]
@@ -731,9 +789,9 @@ def budget(a, K, dist, targets, labels, poses_glob, measured_csv, live_rms):
         p = poses[shot]
         if shot not in cache:
             pose = make_camera_pose(p["distance_mm"], p["elevation_deg"], p["azimuth_deg"])
-            ids = [i for i in p.get("visible_ids", []) if i < len(V3_ORIENTED)] or \
-                visible_ids(V3_ORIENTED, pose, K, dist, Vis(a.max_angle, a.min_width, a.margin))
-            if len(ids) < GATE:
+            ids = [id2idx[i] for i in p.get("visible_ids", []) if i in id2idx] or \
+                visible_ids(ori, pose, K, dist, Vis(a.max_angle, a.min_width, a.margin), size_mm=size)
+            if len(ids) < gate:
                 cache[shot] = None
             else:
                 # live-equivalent noise from this shot's own logged reprojection RMS and marker count
@@ -741,8 +799,8 @@ def budget(a, K, dist, targets, labels, poses_glob, measured_csv, live_rms):
                 sig_s = sig_live if (a.sigma or not a.per_shot_rms or not np.isfinite(rms_s)) \
                     else sigma_for_rms(rms_s, len(ids))
                 sig_used.append(sig_s)
-                cache[shot] = (simulate(V3_ORIENTED, ids, targets, pose, K, dist, a.sigma_static, a.trials),
-                               simulate(V3_ORIENTED, ids, targets, pose, K, dist, sig_s, a.trials))
+                cache[shot] = (simulate(ori, ids, targets, pose, K, dist, a.sigma_static, a.trials, size_mm=size),
+                               simulate(ori, ids, targets, pose, K, dist, sig_s, a.trials, size_mm=size))
         if cache[shot] is None:
             continue
         lo, hi = cache[shot]
@@ -756,11 +814,12 @@ def cmd_atp2(a):
     targets, labels = load_pedicles_from_json(a.targets)
     out, n_poses, n_meas, sig_live = budget(a, K, dist, targets, labels, a.poses, a.measured, a.live_rms)
     sig_static = a.sigma_static
+    print(f"array: {a.vname} ({len(a.oriented)} markers, {a.size_mm:.0f} mm, gate {a.gate_eff})")
     print(f"{n_poses} pose files, {n_meas} measurements")
-    how = "from each shot's own logged RMS and marker count" if (a.per_shot_rms and not a.sigma) else f"from live RMS {a.live_rms} px, 8 markers"
+    how = "from each shot's own logged RMS and marker count" if (a.per_shot_rms and not a.sigma) else f"from live RMS {a.live_rms} px, {len(a.oriented)} markers"
     print(f"corner noise: static test {sig_static:.3f} px; live-equivalent {sig_live:.2f} px on average ({how})\n")
     if not out:
-        sys.exit("No measurements matched a pose file with at least 4 markers.")
+        sys.exit(f"No measurements matched a pose file with at least {a.gate_eff} markers.")
     rms = lambda v: float(np.sqrt(np.mean(np.square(v))))
     sysm = lambda m, k: float(np.sqrt(max(m * m - k * k, 0.0)))
     print(f"{'level':>6s}{'n':>4s}{'measured':>10s}{'MC static':>11s}{'MC live':>9s}{'systematic':>18s}")
@@ -776,7 +835,40 @@ def cmd_atp2(a):
           f"The systematic remainder is {sysm(m, k1):.2f} mm RMS "
           f"({sysm(m, rms([o[2] for o in out])):.2f} mm if only the static-test noise is assumed).")
     print("MC overlay error is the on-screen error at the target depth, the same quantity the click tool measures. "
-          "Poses with fewer than 4 markers are skipped (the live pipeline would not track them).")
+          f"Poses with fewer than {a.gate_eff} markers are skipped (the live pipeline would not track them).")
+
+
+# ---------------------------------------------------------------------------
+# predict: planned ATP-3 poses for any array, with the V3-fitted visibility model
+# ---------------------------------------------------------------------------
+def cmd_predict(a):
+    K, dist = load_cal(a.calibration)
+    sv = soft_from_args(a)
+    ori, size, gate = a.oriented, a.size_mm, a.gate_eff
+    print(f"Prediction for {a.vname}: {len(ori)} markers, {size:.0f} mm, gate {gate}. Visibility model: 50% at "
+          f"{sv.th50:.1f} deg and {sv.w50:.1f} px (V3 fit, NOT refitted). Write these down before measuring.\n")
+    sweeps = [("distance (az 270, el 45)", [(d, 45, 270) for d in range(450, 1001, 50)], "dist mm", 0),
+              ("azimuth at 600 mm, el 45", [(600, 45, z) for z in range(0, 360, 30)], "az deg", 2),
+              ("azimuth at 600 mm, el 30", [(600, 30, z) for z in range(0, 360, 30)], "az deg", 2),
+              ("elevation (600 mm, az 270)", [(600, e, 270) for e in range(10, 81, 10)], "el deg", 1)]
+    rows = []
+    for title, poses, lab, k in sweeps:
+        print(f"{title}\n{lab:>9s}{'exp mk':>8s}{'hard mk':>9s}{'P(>=gate)%':>12s}   per-marker P")
+        for d, e, z in poses:
+            pose = make_camera_pose(d, e, z)
+            p = marker_probs(ori, pose, K, dist, sv, size_mm=size)
+            hard = len(visible_ids(ori, pose, K, dist, Vis(sv.th50, sv.w50, a.margin), size_mm=size))
+            pg = p_at_least(p, gate) * 100
+            print(f"{(d, e, z)[k]:>9d}{p.sum():>8.1f}{hard:>9d}{pg:>12.0f}   " + " ".join(f"{x:.2f}" for x in p))
+            rows.append([title, d, e, z, f"{p.sum():.3f}", hard, f"{pg:.1f}"] + [f"{x:.3f}" for x in p])
+        print()
+    out = Path(a.out_predict); out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["sweep", "dist_mm", "elev_deg", "az_deg", "expected_markers", "hard_markers", "p_pnp_pct"]
+                   + [f"p_id{i}" for i in a.ids])
+        w.writerows(rows)
+    print(f"Saved {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +962,7 @@ def cmd_fle(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["fit", "design", "tilt", "atp4", "atp2", "fle", "figs"])
+    ap.add_argument("cmd", choices=["fit", "design", "tilt", "atp4", "atp2", "fle", "figs", "predict"])
     d = "data/atp/"
     ap.add_argument("--calibration", default="data/calibration/s22_ultra_v1/camera_calibration.npz")
     ap.add_argument("--targets", default="annotations/pedicle_entry_targets.json")
@@ -894,7 +986,10 @@ def main():
     ap.add_argument("--elev-drop", type=int, nargs="*", default=[9], dest="elev_drop",
                     help="ATP-3.3 step numbers to leave out (default 9: movement at the end of the run)")
     ap.add_argument("--min-dist", type=float, default=550.0, help="fit: ignore ATP-3 steps closer than this (aim point not logged)")
-    ap.add_argument("--gate", type=int, default=GATE)
+    ap.add_argument("--gate", type=int, default=None, help="minimum markers (default 4, or the marker map's min_markers_pnp)")
+    ap.add_argument("--marker-map", default=None, help="atp2/predict: use the real marker poses, size and gate from a live marker_map.json")
+    ap.add_argument("--variant", default=None, help="atp2/predict: a design_variants_oriented name (default V3_8marker)")
+    ap.add_argument("--out-predict", default="results/tre_analysis/atp3_prediction.csv")
     ap.add_argument("--distance", type=float, default=450.0)
     ap.add_argument("--sigma-static", type=float, default=0.121)
     ap.add_argument("--sigma-live", type=float, default=0.91)
@@ -916,7 +1011,11 @@ def main():
     ap.add_argument("--hands", choices=["none", "left", "right", "both"], default="none",
                     help="design: hand stand-in occlusion check for a surgeon on this side")
     a = ap.parse_args()
-    {"fit": cmd_fit, "design": cmd_design, "tilt": cmd_tilt, "atp4": cmd_atp4, "atp2": cmd_atp2, "fle": cmd_fle, "figs": cmd_figs}[a.cmd](a)
+    resolve_variant(a)
+    a.gate_cli = a.gate
+    if a.gate is None:
+        a.gate = a.gate_eff            # design/tilt/figs read a.gate
+    {"fit": cmd_fit, "design": cmd_design, "tilt": cmd_tilt, "atp4": cmd_atp4, "atp2": cmd_atp2, "fle": cmd_fle, "figs": cmd_figs, "predict": cmd_predict}[a.cmd](a)
 
 
 if __name__ == "__main__":
