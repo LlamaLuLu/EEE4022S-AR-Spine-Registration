@@ -21,7 +21,8 @@ UI v2 (pedicle selection) is the default: the per-vertebra meshes in
 phantom/meshes/v3_overlay are loaded automatically. Select one pedicle at a
 time. Keys: W/S or Up/Down step the vertebra, A/D or Left/Right pick the side,
 1-5 jump to a level, [ and ] walk the ten pedicles in order, T (or 0) shows all
-levels, Y wireframe, F fullscreen, P photo, Shift+P prints per-marker residuals.
+levels, Y wireframe, E error circle, F fullscreen, P photo, H engineer mode (ArUco
+boxes, marker count, pose, Shift+P residuals), ? help.
 If those meshes are missing or fail to load, the original single-mesh
 wireframe (--stl) is used instead. Pass --vertebrae-dir none to force it.
 """
@@ -36,11 +37,11 @@ import cv2
 from replay_source import ReplayCapture, is_replay_source
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, QEvent
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QWidget, QStackedLayout,
-    QVBoxLayout, QHBoxLayout,
+    QVBoxLayout, QHBoxLayout, QSizePolicy,
 )
 
 # ArUco + TRE pipeline (unchanged from cv2 version)
@@ -55,7 +56,8 @@ from ar_overlay import (
     is_in_envelope,
 )
 from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
-from ar_selection import Selection
+from ar_selection import Selection, parse_label, SIDE_NAMES
+from ar_guidance import trust_badge
 from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
                       draw_error_circle)
 from ar_stl import (
@@ -66,10 +68,8 @@ from ar_theme import envelope_tier
 
 # Qt HUD
 from ar_qt_styles import QSS
-from ar_qt_hud import (
-    StatusPanel, PosePanel, TrePanel, StatePill,
-    ShortcutsPanel, AxisTriadWidget, TargetRadarWidget,
-)
+from ar_qt_hud import AxisTriadWidget
+from ar_qt_rail import Rail, HelpOverlay, RAIL_QSS
 
 
 EXTENSION_MM = 70.0     # guide band length beyond the entry point
@@ -426,6 +426,8 @@ class ARWindow(QMainWindow):
         self.tracker = Tracker(self.detector, self.corner_lut, self.K, self.D,
                                self.target_pts, args.fle, self.is_v3)
         self.show_ellipses = self.show_wire = True
+        self.engineer = False                         # H: diagnostics for the engineer, hidden by default
+        self._fitted = False                          # window shaped to the camera frame once
 
         # --- Timing instrumentation ---
         self._frame_count = 0
@@ -473,127 +475,106 @@ class ARWindow(QMainWindow):
         return self.tracker.state
 
     def _build_ui(self):
-        """Video label as central widget, HUD widgets as its children."""
+        """Docked left rail + video. Overlays (triad, hint bar, help) sit on the video."""
         self.setWindowTitle("AR Spine Navigation")
+        self.setFocusPolicy(Qt.StrongFocus)
 
+        central = QWidget()
+        lay = QHBoxLayout(central)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self.rail = Rail(self.n_total, self.corner_lut.min_markers, self.selection.levels)
+        self.rail.selector.levelClicked.connect(lambda lv: self._select(self.selection.select, lv))
+        self.rail.selector.sideClicked.connect(lambda s_: self._select(self.selection.set_side, s_))
+        self.rail.selector.overviewClicked.connect(lambda: self._select(self.selection.overview))
+        self.rail.helpClicked.connect(self._toggle_help)
+        self.rail.engineerClicked.connect(self._toggle_engineer)
+        lay.addWidget(self.rail)
+
+        # The pixmap must never decide the window size: Ignored lets the layout win.
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("background-color: black;")
-        self.video_label.setMinimumSize(640, 480)
-        self.setCentralWidget(self.video_label)
+        self.video_label.setMinimumSize(480, 360)
+        self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        lay.addWidget(self.video_label, 1)
+        self.setCentralWidget(central)
 
-        # All HUD widgets are direct children of the video label
-        self.status_panel = StatusPanel(n_total=self.n_total,
-                                        gate=self.corner_lut.min_markers,
-                                        parent=self.video_label)
-        self.pose_panel = PosePanel(parent=self.video_label)
-        self.tre_panel = TrePanel(parent=self.video_label)
-        self.state_pill = StatePill(parent=self.video_label)
-        self.shortcuts_panel = ShortcutsPanel(parent=self.video_label)
         self.axis_triad = AxisTriadWidget(parent=self.video_label)
-        self.target_radar = TargetRadarWidget(parent=self.video_label)
+        self.hint_bar = QLabel(parent=self.video_label)
+        self.hint_bar.setObjectName("hintBar")
+        self.hint_bar.hide()
+        self.help = HelpOverlay(parent=self.video_label)
+        self.video_label.installEventFilter(self)        # reposition overlays when the video resizes
 
-        # Focus indicator (bottom centre), styled to match the HUD panels
-        self.focus_label = QLabel(parent=self.video_label)
-        self.focus_label.setStyleSheet(
-            "background-color: rgba(16, 20, 26, 215); color: #E1E8EB;"
-            "border-top: 2px solid #3CC3C3; padding: 6px 14px;"
-            "font-family: Menlo, Consolas, monospace; font-size: 15px;")
-        self.focus_label.hide()
+        self.resize(1360, 800)
 
-        # Adjust sizes now so positioning works
-        for w in [self.status_panel, self.pose_panel, self.tre_panel,
-                  self.state_pill, self.shortcuts_panel]:
-            w.adjustSize()
-            w.show()
-            w.raise_()
-        self.axis_triad.show()
-        self.axis_triad.raise_()
-        self.target_radar.show()
-        self.target_radar.raise_()
+    # ---- overlay placement ----
 
-        # Toggle flags for optional widgets
-        self._show_triad = True
-        self._show_radar = True
-        self._show_shortcuts = True
+    def eventFilter(self, obj, event):
+        if obj is self.video_label and event.type() == QEvent.Resize:
+            self._place_overlays()
+        return super().eventFilter(obj, event)
 
-        self.resize(1280, 800)
-
-    def resizeEvent(self, event):
-        """Reposition HUD widgets when window resizes."""
-        super().resizeEvent(event)
-        w, h = self.width(), self.height()
+    def _place_overlays(self):
+        w, h = self.video_label.width(), self.video_label.height()
         pad = max(int(h * 0.02), 12)
-        gap = 12
-
-        # ---- Top-left column: pose on top, status below ----
-        self.pose_panel.adjustSize()
-        self.pose_panel.move(pad, pad)
-
-        self.status_panel.adjustSize()
-        self.status_panel.move(pad, pad + self.pose_panel.height() + gap)
-
-        # ---- Top-right column: axis triad on top, target radar below ----
-        triad_x = w - self.axis_triad.width() - pad
-        self.axis_triad.move(triad_x, pad)
-
-        radar_x = w - self.target_radar.width() - pad
-        radar_y = pad + self.axis_triad.height() + gap
-        self.target_radar.move(radar_x, radar_y)
-
-        # ---- Bottom-left: TRE panel ----
-        self.tre_panel.adjustSize()
-        tre_y = h - self.tre_panel.height() - pad
-        self.tre_panel.move(pad, tre_y)
-
-        # ---- Top-center: state pill ----
-        self.state_pill.adjustSize()
-        self.state_pill.move((w - self.state_pill.width()) // 2, pad)
-
-        # ---- Bottom-centre: focus indicator ----
-        self._place_focus_label()
-
-        # ---- Bottom-right: shortcuts panel ----
-        self.shortcuts_panel.adjustSize()
-        self.shortcuts_panel.move(
-            w - self.shortcuts_panel.width() - pad,
-            h - self.shortcuts_panel.height() - pad
-        )
-
-        # Ensure all widgets render on top of the pixmap
-        for widget in [self.status_panel, self.pose_panel, self.tre_panel,
-                       self.state_pill, self.shortcuts_panel,
-                       self.axis_triad, self.target_radar]:
-            widget.raise_()
-
-    def _place_focus_label(self):
-        self.focus_label.adjustSize()
-        self.focus_label.move((self.width() - self.focus_label.width()) // 2,
-                              self.height() - self.focus_label.height()
-                              - max(int(self.height() * 0.02), 12))
+        self.axis_triad.move(w - self.axis_triad.width() - pad, pad)
+        self.hint_bar.adjustSize()
+        self.hint_bar.move((w - self.hint_bar.width()) // 2, h - self.hint_bar.height() - pad)
+        self.help.adjustSize()
+        self.help.move((w - self.help.width()) // 2, (h - self.help.height()) // 2)
+        for wd in (self.axis_triad, self.hint_bar, self.help):
+            wd.raise_()
 
     @property
     def focus_level(self):
         return self.selection.level
 
-    def _update_focus_label(self):
-        if self.state != "NAVIGATING":
-            if self.focus_label.isVisible():
-                self.focus_label.hide()
-            return
-        sel = self.selection
-        if sel.is_overview:
-            txt = "ALL LEVELS      W/S or A/D: select a pedicle"
+    def _toggle_help(self):
+        on = not self.help.isVisible()
+        self.help.setVisible(on)
+        self.rail.set_help(on)
+        self._place_overlays()
+
+    def _toggle_fullscreen(self):
+        """Pause frame processing during the macOS fullscreen animation,
+        otherwise the busy event loop can freeze it."""
+        self.timer.stop()
+        if self.isFullScreen():
+            self.showNormal()
         else:
-            prev_l, next_l = sel.neighbour_levels()
-            txt = (f"{sel.name.upper()}      "
-                   f"W/S: {'L%d' % prev_l if prev_l else '-'} / {'L%d' % next_l if next_l else '-'}    "
-                   f"A/D: left / right    T: all levels")
-        if self.focus_label.text() != txt:
-            self.focus_label.setText(txt)
-            self._place_focus_label()
-        self.focus_label.show()
-        self.focus_label.raise_()
+            self.showFullScreen()
+        QTimer.singleShot(900, lambda: self.timer.start(33))
+
+    def _toggle_engineer(self):
+        self.engineer = not self.engineer
+        self.rail.set_engineer(self.engineer)
+
+    def _friendly(self, j):
+        """'L3_E_R' -> 'L3 right'."""
+        p = parse_label(self.target_labels[j])
+        return f"L{p[0]} {SIDE_NAMES[p[1]]}" if p else str(self.target_labels[j])
+
+    def _update_hint(self, r):
+        """One line at the bottom of the video: what the keys do right now."""
+        if r.state != "NAVIGATING":
+            txt = {"VERIFYING": "C  confirm      R  reject",
+                   "STALE": "Bring the markers back into view"}.get(r.state, "")
+        elif self.selection.is_overview:
+            txt = "ALL LEVELS      W/S or A/D  pick a pedicle"
+        else:
+            txt = f"{self.selection.name.upper()}      W/S  level      A/D  side      T  all levels"
+        if not txt:
+            self.hint_bar.hide()
+            return
+        if self.hint_bar.text() != txt:
+            self.hint_bar.setText(txt)
+            self._place_overlays()
+        self.hint_bar.show()
+        self.hint_bar.raise_()
+
 
     # ================================================================
     # Frame loop
@@ -651,7 +632,7 @@ class ARWindow(QMainWindow):
 
     def _draw_overlays(self, frame, r):
         state, rvec, tvec = r.state, r.rvec, r.tvec
-        if r.ids is not None and len(r.ids) > 0:
+        if self.engineer and r.ids is not None and len(r.ids) > 0:
             cv2.aruco.drawDetectedMarkers(frame, r.corners, r.ids,
                                           borderColor=(60, 160, 60))
         if state not in ("VERIFYING", "NAVIGATING", "STALE"):
@@ -725,59 +706,48 @@ class ARWindow(QMainWindow):
     # ---- HUD: pushes the FrameResult into the Qt widgets ----
 
     def _update_widgets(self, r):
-        self.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
-        self.status_panel.set_accent({
-            "SEARCHING": "stale",
-            "VERIFYING": "default",
-            "NAVIGATING": "good",
-            "STALE": "bad",
-        }.get(r.state, "default"))
+        rail = self.rail
+        rail.state_pill.set_state(r.state, r.verify_remaining)
+        rail.trust.update_state(*trust_badge(r, self.is_v3, self.n_total))
+        rail.selector.set_state(self.selection.level, self.selection.side)
 
-        self.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
-        self.pose_panel.set_accent(
-            {"full": "good", "reduced": "warn"}.get(r.env_tier, "bad"))
+        j, r95_mm, status = self._error_summary(r)
+        if j is None:
+            rail.card.update_state(self.selection.name, None, "muted",
+                                   "Waiting for tracking")
+        elif self.selection.is_overview:
+            rail.card.update_state("All levels", r95_mm, status,
+                                   f"Worst entry point: {self._friendly(j)}. 95% of the time within this.")
+        else:
+            rail.card.update_state(self.selection.name, r95_mm, status,
+                                   "Expected error at the entry point. 95% of the time within this.")
 
-        label, r95_mm, status = self._error_summary(r)
-        self.tre_panel.update_error(label, r95_mm, status)
+        if self.engineer:
+            rail.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
+            rail.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
 
-        self.state_pill.set_state(r.state, r.verify_remaining)
-
-        # Axis triad
-        if self._show_triad and r.pnp_ok and r.state != "SEARCHING":
+        if r.pnp_ok and r.state != "SEARCHING":
             self.axis_triad.set_rvec(r.rvec)
             if not self.axis_triad.isVisible():
                 self.axis_triad.show()
         else:
             self.axis_triad.set_rvec(None)
 
-        # Target radar
-        if self._show_radar and r.state == "NAVIGATING":
-            self.target_radar.set_tre_values(r.tre_values, self.target_labels, r.env_tier)
-            if not self.target_radar.isVisible():
-                self.target_radar.show()
-        else:
-            self.target_radar.set_tre_values(None, [], r.env_tier)
-
-        self._update_focus_label()
-
-        # Reposition state pill (its width changes with countdown text)
-        w = self.width()
-        self.state_pill.move((w - self.state_pill.width()) // 2,
-                             max(int(self.height() * 0.02), 12))
+        self._update_hint(r)
 
     def _error_summary(self, r):
-        """(target label, 95 % error mm, status) for the HUD.
-        One pedicle selected: its entry point. Overview: the worst entry point."""
+        """(target index, 95 % error mm, status). One pedicle selected: its entry point.
+        Overview: the worst entry point. Index is None when there is nothing to show."""
         if r.tre_values is None or r.state == "SEARCHING":
-            return "--", None, "muted"
+            return None, None, "muted"
         r95 = error_radius95(np.asarray(r.tre_values), self.anchor)
         if self.selection.is_overview:
             j = int(self.entry_idx[np.argmax(r95[self.entry_idx])])
         else:
             j = self.selection.entry_idx
         if not np.isfinite(r95[j]):
-            return "--", None, "muted"
-        return self.target_labels[j], float(r95[j]), grade(r95[j], r.env_tier)
+            return None, None, "muted"
+        return j, float(r95[j]), grade(r95[j], r.env_tier)
 
     def _pose_dict(self, r):
         """Pose and status saved next to screenshots (None if there is no pose)."""
@@ -821,16 +791,34 @@ class ARWindow(QMainWindow):
         ] + tre_vals)
         self._csv_file.flush()
 
+    def _fit_window_to_frame(self, fw, fh):
+        """Once, on the first frame: make the video area the same shape as the
+        camera frame, so it fills the window with no black bars."""
+        self._fitted = True
+        if self.isFullScreen() or self.isMaximized():
+            return
+        avail = self.screen().availableGeometry()
+        vh = self.video_label.height()
+        vw = round(vh * fw / fh)
+        total_w = self.rail.width() + vw
+        if total_w > avail.width():                   # small screen: fit the width instead
+            total_w = avail.width()
+            vw = total_w - self.rail.width()
+            vh = round(vw * fh / fw)
+        self.resize(total_w, vh)
+
     def _show_frame(self, frame_bgr):
         """Convert BGR numpy frame to QPixmap and set on the video label."""
         h, w, _ = frame_bgr.shape
+        if not self._fitted:
+            self._fit_window_to_frame(w, h)
         # BGR -> RGB for Qt
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
-        # Scale to fill the label preserving aspect
+        # Fit the whole frame inside the label (nothing cropped)
         pix = pix.scaled(self.video_label.size(),
-                         Qt.KeepAspectRatioByExpanding,
+                         Qt.KeepAspectRatio,
                          Qt.FastTransformation)
         self.video_label.setPixmap(pix)
 
@@ -846,11 +834,15 @@ class ARWindow(QMainWindow):
         if text == "q":
             self.close()
         elif k == Qt.Key_Escape:
-            # Toggle shortcuts panel
-            self._show_shortcuts = not self._show_shortcuts
-            self.shortcuts_panel.setVisible(self._show_shortcuts)
+            if self.help.isVisible():
+                self._toggle_help()
+        elif text == "?":
+            self._toggle_help()
         elif k == Qt.Key_P and shift:
-            self.tracker.print_residuals = True          # debug, one-shot
+            if self.engineer:
+                self.tracker.print_residuals = True      # debug, one-shot
+            else:
+                print("Shift+P: turn on engineer mode (H) first")
         # ---- selection: level, side, overview ----
         elif k in (Qt.Key_W, Qt.Key_Up):
             self._select(sel.step_level, -1)
@@ -874,23 +866,11 @@ class ARWindow(QMainWindow):
         elif text == "e":
             self.show_ellipses = not self.show_ellipses
         elif text == "f":
-            if self.isFullScreen():
-                self.showNormal()
-            else:
-                self.showFullScreen()
+            self._toggle_fullscreen()
         elif text == "p":
             self._save_screenshot()
         elif text == "h":
-            # Toggle all HUD panels
-            for widget in [self.status_panel, self.pose_panel, self.tre_panel,
-                           self.state_pill]:
-                widget.setVisible(not widget.isVisible())
-        elif text == "g":
-            self._show_triad = not self._show_triad
-            self.axis_triad.setVisible(self._show_triad)
-        elif text == "x":
-            self._show_radar = not self._show_radar
-            self.target_radar.setVisible(self._show_radar)
+            self._toggle_engineer()
         # ---- registration and logging ----
         elif text == "c":
             self.tracker.confirm()
@@ -986,7 +966,7 @@ def main():
 
     # HiDPI is on by default in Qt6, no explicit attributes needed.
     app = QApplication(sys.argv)
-    app.setStyleSheet(QSS)
+    app.setStyleSheet(QSS + RAIL_QSS)
 
     window = ARWindow(args)
     window.show()
