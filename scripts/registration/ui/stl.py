@@ -250,7 +250,7 @@ def outline_segments(mesh, rvec, tvec, K, D, mode="outline"):
 
 
 def _blend_lines(frame, segs, color, alpha, thickness):
-    """Draw all segments in one polylines call and alpha-blend only where lines landed."""
+    """Draw all segments in one polylines call and alpha-blend only the pixels the lines touch."""
     if len(segs) == 0:
         return
     h, w = frame.shape[:2]
@@ -261,10 +261,11 @@ def _blend_lines(frame, segs, color, alpha, thickness):
         return
     layer = np.zeros((y1 - y0, x1 - x0), np.uint8)
     cv2.polylines(layer, (segs - np.array([x0, y0], np.int32)).astype(np.int32), False, 255, thickness, cv2.LINE_AA)
-    a = (layer.astype(np.float32) / 255.0 * alpha)[..., None]
-    roi = frame[y0:y1, x0:x1].astype(np.float32)
-    roi = roi * (1 - a) + np.array(color, np.float32) * a
-    frame[y0:y1, x0:x1] = roi.astype(np.uint8)
+    idx = layer > 0                                   # lines cover few pixels: blend just those
+    a = layer[idx].astype(np.float32)[:, None] * (alpha / 255.0)
+    roi = frame[y0:y1, x0:x1]
+    px = roi[idx].astype(np.float32)
+    roi[idx] = (px * (1 - a) + np.array(color, np.float32) * a).astype(np.uint8)
 
 
 STYLE = {
@@ -278,7 +279,7 @@ STYLE = {
 FILL_DOWNSCALE = 4              # tint grid is 1/4 resolution: faster; 2 is tighter, 6 is softer
 _FILL_K3 = np.ones((3, 3), np.uint8)
 
-def _fill_mesh(frame, mesh, rvec, tvec, K, D, color, alpha):
+def _fill_mesh(frame, mesh, rvec, tvec, K, D, color, alpha, exact=False):
     """Faint tint over the visible surface of one vertebra. Splats the visible vertices on a
     coarse grid, closes the gaps and scales up: ~10x faster than filling every triangle."""
     if alpha <= 0:
@@ -287,6 +288,9 @@ def _fill_mesh(frame, mesh, rvec, tvec, K, D, color, alpha):
     cam = (-R.T @ np.asarray(tvec, float).reshape(3)).astype(np.float32)
     front = np.einsum("ij,ij->i", mesh.tri_normals, cam - mesh.tri_centres) > 0
     if not front.any():
+        return
+    if exact:
+        _fill_mesh_exact(frame, mesh, front, rvec, tvec, K, D, color, alpha)
         return
     used = np.zeros(len(mesh.verts), bool)
     used[mesh.tris[front].ravel()] = True
@@ -310,7 +314,26 @@ def _fill_mesh(frame, mesh, rvec, tvec, K, D, color, alpha):
     frame[y0:y1, x0:x1] = (roi * (1 - a) + np.array(color, np.float32) * a).astype(np.uint8)
 
 
-def draw_vertebra_layers(frame, meshes, rvec, tvec, K, D, selected=None, ghost_neighbours=True, style=None):
+def _fill_mesh_exact(frame, mesh, front, rvec, tvec, K, D, color, alpha):
+    """Tint every visible triangle. Slower than the coarse splat (one fillPoly over all triangles)
+    but exact at any magnification, so it is used in the zoom view, where the splat leaves holes."""
+    pts, _ = cv2.projectPoints(mesh.verts.astype(np.float64).reshape(-1, 1, 3), rvec, tvec, K, D)
+    pts = np.round(np.clip(pts.reshape(-1, 2), -20000, 20000)).astype(np.int32)
+    tri = pts[mesh.tris[front]]
+    h, w = frame.shape[:2]
+    x0, y0 = max(int(tri[..., 0].min()), 0), max(int(tri[..., 1].min()), 0)
+    x1, y1 = min(int(tri[..., 0].max()) + 1, w), min(int(tri[..., 1].max()) + 1, h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    mask = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    cv2.fillPoly(mask, tri - np.array([x0, y0], np.int32), 255)
+    roi = frame[y0:y1, x0:x1]
+    tinted = cv2.addWeighted(roi, 1.0 - alpha, np.full_like(roi, color), alpha, 0)
+    cv2.copyTo(tinted, mask, roi)                      # only where the vertebra is
+
+
+def draw_vertebra_layers(frame, meshes, rvec, tvec, K, D, selected=None, ghost_neighbours=True, style=None,
+                         exact_fill=False):
     """
     Draw the vertebrae onto `frame` (BGR uint8, modified in place). Returns the list of levels drawn.
 
@@ -322,7 +345,7 @@ def draw_vertebra_layers(frame, meshes, rvec, tvec, K, D, selected=None, ghost_n
     if selected is None:
         for lv, m in meshes.items():
             s = st["verify"]
-            _fill_mesh(frame, m, rvec, tvec, K, D, s["color"], s.get("fill_alpha", 0.0))
+            _fill_mesh(frame, m, rvec, tvec, K, D, s["color"], s.get("fill_alpha", 0.0), exact_fill)
             _blend_lines(frame, outline_segments(m, rvec, tvec, K, D, s["mode"]), s["color"], s["alpha"], s["thickness"])
             drawn.append(lv)
         return drawn
@@ -334,7 +357,7 @@ def draw_vertebra_layers(frame, meshes, rvec, tvec, K, D, selected=None, ghost_n
                 drawn.append(lv)
     if selected in meshes:
         s = st["selected"]
-        _fill_mesh(frame, meshes[selected], rvec, tvec, K, D, s["color"], s.get("fill_alpha", 0.0))
+        _fill_mesh(frame, meshes[selected], rvec, tvec, K, D, s["color"], s.get("fill_alpha", 0.0), exact_fill)
         _blend_lines(frame, outline_segments(meshes[selected], rvec, tvec, K, D, s["mode"]), s["color"], s["alpha"], s["thickness"])
         drawn.append(selected)
     return drawn

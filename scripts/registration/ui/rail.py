@@ -116,6 +116,21 @@ QLabel#helpHead {
     letter-spacing: 2px;
     background: transparent;
 }
+QWidget#viewGrid { background-color: #2D373C; }
+QLabel#viewPane {
+    background-color: #05080A;
+    color: #8791A0;
+    font-size: 14px;
+}
+QLabel#paneTag {
+    background-color: rgba(16, 20, 22, 215);
+    color: #3CC3C3;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-family: "Menlo", "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+}
 QLabel#hintBar {
     background-color: rgba(16, 20, 22, 215);
     color: #E1E8EB;
@@ -228,6 +243,29 @@ class PedicleSelector(QWidget):
         _set_prop(self.all_btn, "active", "true" if level is None else "false")
 
 
+class ViewsMenu(QWidget):
+    """One toggle per extra view. Emits the view's name when clicked."""
+    toggled = Signal(str)
+
+    def __init__(self, views, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        t = QLabel("VIEWS")
+        t.setObjectName("railTitle")
+        v.addWidget(t)
+        self.btns = {}
+        for name, text in views:
+            b = _button(text, "railLink")
+            b.clicked.connect(lambda _=False, n=name: self.toggled.emit(n))
+            v.addWidget(b)
+            self.btns[name] = b
+
+    def set_active(self, name, on):
+        _set_prop(self.btns[name], "active", "true" if on else "false")
+
+
 class TargetCard(HudPanel):
     """The selected pedicle and its expected error, in one glance."""
 
@@ -267,14 +305,17 @@ HELP_ROWS = [
                           ("1 - 5", "jump to a vertebra"),
                           ("[ / ]", "walk the ten pedicles"),
                           ("T", "all levels")]),
-    ("View", [("Y", "bone outline on / off"),
+    ("View", [("Z", "zoom view on / off"),
+              ("+ / -", "zoom in / out (or mouse wheel)"),
+              ("V", "zoom layout: inset / side by side"),
+              ("Y", "bone outline on / off"),
               ("E", "error circle on / off"),
               ("F", "fullscreen"),
               ("P", "save a photo")]),
     ("Registration", [("C", "confirm"),
                       ("R", "reject and re-check")]),
-    ("Other", [("H", "engineer mode"),
-               ("?", "this help"),
+    ("Other", [("M", "debug mode"),
+               ("H or ?", "this help"),
                ("Q", "quit")]),
 ]
 
@@ -308,6 +349,7 @@ class HelpOverlay(QFrame):
 
 class Rail(QFrame):
     helpClicked = Signal()
+    viewToggled = Signal(str)
     engineerClicked = Signal()
 
     def __init__(self, n_total, gate, levels, parent=None):
@@ -328,13 +370,16 @@ class Rail(QFrame):
         v.addWidget(self.selector)
         self.card = TargetCard()                     # the selected pedicle and its expected error
         v.addWidget(self.card)
+        self.views_menu = ViewsMenu([("zoom", "Zoom   Z")])
+        self.views_menu.toggled.connect(self.viewToggled.emit)
+        v.addWidget(self.views_menu)
 
         # engineer diagnostics, hidden until engineer mode is on
         self.engineer_box = QWidget()
         ev = QVBoxLayout(self.engineer_box)
         ev.setContentsMargins(0, 0, 0, 0)
         ev.setSpacing(10)
-        t = QLabel("ENGINEER")
+        t = QLabel("DEBUG")
         t.setObjectName("railTitle")
         ev.addWidget(t)
         self.status_panel = StatusPanel(n_total=n_total, gate=gate)
@@ -347,18 +392,21 @@ class Rail(QFrame):
         v.addStretch(1)
 
         bottom = QHBoxLayout()
-        self.help_btn = _button("Help  ?", "railLink")
+        self.help_btn = _button("Help  H", "railLink")
         self.help_btn.clicked.connect(self.helpClicked.emit)
-        self.eng_btn = _button("Engineer  H", "railLink")
+        self.eng_btn = _button("Debug mode  M", "railLink")
         self.eng_btn.clicked.connect(self.engineerClicked.emit)
-        bottom.addWidget(self.help_btn)
-        bottom.addStretch(1)
         bottom.addWidget(self.eng_btn)
+        bottom.addStretch(1)
+        bottom.addWidget(self.help_btn)
         v.addLayout(bottom)
 
     def set_engineer(self, on):
         self.engineer_box.setVisible(on)
         _set_prop(self.eng_btn, "active", "true" if on else "false")
+
+    def set_view(self, name, on):
+        self.views_menu.set_active(name, on)
 
     def set_help(self, on):
         _set_prop(self.help_btn, "active", "true" if on else "false")

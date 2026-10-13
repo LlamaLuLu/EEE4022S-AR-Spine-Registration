@@ -21,8 +21,8 @@ UI v2 (pedicle selection) is the default: the per-vertebra meshes in
 phantom/meshes/v3_overlay are loaded automatically. Select one pedicle at a
 time. Keys: W/S or Up/Down step the vertebra, A/D or Left/Right pick the side,
 1-5 jump to a level, [ and ] walk the ten pedicles in order, T (or 0) shows all
-levels, Y wireframe, E error circle, F fullscreen, P photo, H engineer mode (ArUco
-boxes, marker count, pose, Shift+P residuals), ? help.
+levels, Y wireframe, E error circle, Z zoom view (+ / - or the wheel change the zoom), F fullscreen, P photo, M debug mode (ArUco
+boxes, marker count, pose, Shift+P residuals), H or ? help.
 If those meshes are missing or fail to load, the original single-mesh
 wireframe (--stl) is used instead. Pass --vertebrae-dir none to force it.
 """
@@ -62,7 +62,7 @@ from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
                       draw_error_circle)
 from ui.stl import (
     load_stl_for_wireframe, load_vertebra_meshes,
-    draw_vertebra_layers, _blend_lines,
+    draw_vertebra_layers, _blend_lines, STYLE as VERT_STYLE,
 )
 from ar_theme import envelope_tier
 
@@ -70,12 +70,27 @@ from ar_theme import envelope_tier
 from ui.styles import QSS
 from ui.hud import AxisTriadWidget
 from ui.rail import Rail, HelpOverlay, RAIL_QSS
+from ui.views import ViewPane, ZoomControls
+from ui.zoom import project_point, zoom_frame
 
 
 EXTENSION_MM = 70.0     # guide band length beyond the entry point
 TICK_MM = 5.0           # a tick mark every 5 mm
 LABEL_MM = 10.0         # longer tick every 10 mm; numbers every 10 mm when they fit
 BAND_ALPHA = 0.70       # opacity of the outer (approach) guide band
+MAIN_STYLE = "background-color: black;"
+INSET_STYLE = "background-color: black; border: 2px solid #3CC3C3;"
+INSET_FRAC = 0.30        # zoom layout 'inset': camera picture-in-picture width, as a share of the video area
+SPLIT_FRAC = 0.50        # zoom layout 'split': the camera's share of the width
+FOV_STEPS = (150.0, 120.0, 90.0, 60.0, 40.0)   # zoom steps: width of the field of view in mm (wide to tight)
+AUTO_ZOOM = True                                  # open zoom on the first pedicle pick, close it on all levels
+ZOOM_DEFAULT = 2                                 # index into FOV_STEPS when zoom is first opened (90 mm)
+ZOOM_LINE_PX = 2                                 # vertebra outline thickness in the zoom view
+ZOOM_TINT = 0.16                                 # faint fill of the selected vertebra in the zoom view
+BOX_FILL = 0.22                                  # faint teal fill inside the crop box on the camera view
+BOX_BGR = (195, 195, 60)                         # teal, the colour of the inset border
+ZOOM_STYLE = {k: {**v, "thickness": ZOOM_LINE_PX} for k, v in VERT_STYLE.items()}
+ZOOM_STYLE["selected"]["fill_alpha"] = ZOOM_TINT
 OVERVIEW_EXT_MM = 50.0  # thin extension beyond the entry point in the all-levels view
 OUTER_COLOUR = (200, 150, 55)    # BGR blue, outer trajectory (beyond the entry point)
 INNER_COLOUR = (60, 215, 250)    # BGR yellow, inner trajectory (entry to isthmus)
@@ -426,6 +441,9 @@ class ARWindow(QMainWindow):
         self.tracker = Tracker(self.detector, self.corner_lut, self.K, self.D,
                                self.target_pts, args.fle, self.is_v3)
         self.show_ellipses = self.show_wire = True
+        self.zoom_idx = ZOOM_DEFAULT
+        self._wheel_acc = 0
+        self.views = {"zoom": False}                  # extra views that are switched on
         self.engineer = False                         # H: diagnostics for the engineer, hidden by default
         self._fitted = False                          # window shaped to the camera frame once
 
@@ -489,40 +507,96 @@ class ARWindow(QMainWindow):
         self.rail.selector.sideClicked.connect(lambda s_: self._select(self.selection.set_side, s_))
         self.rail.selector.overviewClicked.connect(lambda: self._select(self.selection.overview))
         self.rail.helpClicked.connect(self._toggle_help)
+        self.rail.viewToggled.connect(self._toggle_view)
         self.rail.engineerClicked.connect(self._toggle_engineer)
         lay.addWidget(self.rail)
 
-        # The pixmap must never decide the window size: Ignored lets the layout win.
-        self.video_label = QLabel()
+        # The stage holds the camera view and the zoom view. They are placed by hand
+        # (see _layout_views) so the zoom can fill it with the camera as an inset.
+        self.stage = QWidget()
+        self.stage.setObjectName("viewGrid")
+        self.stage.setAttribute(Qt.WA_StyledBackground, True)
+        self.stage.setMinimumSize(640, 400)
+        self.stage.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label = QLabel(self.stage)
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black;")
-        self.video_label.setMinimumSize(480, 360)
-        self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        lay.addWidget(self.video_label, 1)
+        self.video_label.setStyleSheet(MAIN_STYLE)
+        self._main_style = MAIN_STYLE
+        self.zoom_pane = ViewPane("ZOOM", self.stage)
+        self.zoom_pane.hide()
+        self.layout_mode = "inset"                    # with zoom on: "inset" or "split" (V swaps)
+        self._frame_aspect = 9 / 16                   # camera height / width, updated from the frames
+        lay.addWidget(self.stage, 1)
         self.setCentralWidget(central)
 
-        self.axis_triad = AxisTriadWidget(parent=self.video_label)
-        self.hint_bar = QLabel(parent=self.video_label)
+        self.axis_triad = AxisTriadWidget(parent=self.stage)
+        self.zoom_ctl = ZoomControls(self.stage)
+        self.zoom_ctl.hide()
+        self.zoom_ctl.zoomIn.connect(lambda: self._step_zoom(+1))
+        self.zoom_ctl.zoomOut.connect(lambda: self._step_zoom(-1))
+        self.zoom_ctl.reset.connect(self._reset_zoom)
+        self.hint_bar = QLabel(parent=self.stage)
         self.hint_bar.setObjectName("hintBar")
         self.hint_bar.hide()
-        self.help = HelpOverlay(parent=self.video_label)
-        self.video_label.installEventFilter(self)        # reposition overlays when the video resizes
+        self.help = HelpOverlay(parent=self.stage)
+        self.stage.installEventFilter(self)              # re-layout when the stage resizes
 
         self.resize(1360, 800)
 
     # ---- overlay placement ----
 
     def eventFilter(self, obj, event):
-        if obj is self.video_label and event.type() == QEvent.Resize:
-            self._place_overlays()
+        if obj is self.stage and event.type() == QEvent.Resize:
+            self._layout_views()
         return super().eventFilter(obj, event)
 
+    def _layout_views(self):
+        """Place the camera view and the zoom view inside the stage."""
+        W, H = self.stage.width(), self.stage.height()
+        zoom_on = self.views["zoom"]
+        style = MAIN_STYLE
+        if not zoom_on:
+            self.zoom_pane.hide()
+            self.video_label.setGeometry(0, 0, W, H)
+        elif self.layout_mode == "inset":
+            iw = max(int(W * INSET_FRAC), 320)
+            ih = int(iw * self._frame_aspect)
+            m = 14
+            self.zoom_pane.setGeometry(0, 0, W, H)
+            self.zoom_pane.show()
+            self.video_label.setGeometry(W - iw - m, H - ih - m, iw, ih)
+            style = INSET_STYLE
+        else:                                         # split: camera left, zoom right
+            gap = 3
+            mw = int((W - gap) * SPLIT_FRAC)
+            self.video_label.setGeometry(0, 0, mw, H)
+            self.zoom_pane.setGeometry(mw + gap, 0, W - mw - gap, H)
+            self.zoom_pane.show()
+        if style != self._main_style:
+            self._main_style = style
+            self.video_label.setStyleSheet(style)
+        self.video_label.raise_()
+        self.zoom_ctl.setVisible(zoom_on)
+        if zoom_on:
+            self.zoom_ctl.adjustSize()
+            cw, ch = self.zoom_ctl.width(), self.zoom_ctl.height()
+            if self.layout_mode == "inset":               # bottom right, just above the camera inset
+                self.zoom_ctl.move(W - cw - 14, self.video_label.y() - ch - 10)
+            else:                                         # bottom right of the zoom pane
+                self.zoom_ctl.move(W - cw - 14, H - ch - 14)
+            self.zoom_ctl.raise_()
+        self._place_overlays()
+
     def _place_overlays(self):
-        w, h = self.video_label.width(), self.video_label.height()
+        w, h = self.stage.width(), self.stage.height()
         pad = max(int(h * 0.02), 12)
         self.axis_triad.move(w - self.axis_triad.width() - pad, pad)
+        # the hint bar is centred in the space the camera inset leaves free
+        free_w = w
+        if self.views["zoom"] and self.layout_mode == "inset":
+            free_w = w - self.video_label.width() - 2 * 14
         self.hint_bar.adjustSize()
-        self.hint_bar.move((w - self.hint_bar.width()) // 2, h - self.hint_bar.height() - pad)
+        self.hint_bar.move(max((free_w - self.hint_bar.width()) // 2, 0), h - self.hint_bar.height() - pad)
         self.help.adjustSize()
         self.help.move((w - self.help.width()) // 2, (h - self.help.height()) // 2)
         for wd in (self.axis_triad, self.hint_bar, self.help):
@@ -547,6 +621,41 @@ class ARWindow(QMainWindow):
         else:
             self.showFullScreen()
         QTimer.singleShot(900, lambda: self.timer.start(33))
+
+    def _toggle_view(self, name):
+        """Switch an extra view on or off; the side column shows only if some view is on."""
+        self.views[name] = not self.views[name]
+        self.rail.set_view(name, self.views[name])
+        self._layout_views()
+
+    def _step_zoom(self, d):
+        """+ / - : move along FOV_STEPS (clamped). Opens the zoom view first if it is off."""
+        if not self.views["zoom"]:
+            if d > 0:
+                self._toggle_view("zoom")
+            return
+        self.zoom_idx = min(max(self.zoom_idx + d, 0), len(FOV_STEPS) - 1)
+
+    def _reset_zoom(self):
+        """Back to the plain camera view (the zoom level is remembered for next time)."""
+        if self.views["zoom"]:
+            self._toggle_view("zoom")
+
+    def wheelEvent(self, event):
+        if self.views["zoom"] and self.zoom_pane.geometry().contains(self.stage.mapFrom(self, event.position().toPoint())):
+            self._wheel_acc += event.angleDelta().y()
+            while abs(self._wheel_acc) >= 120:             # one step per wheel notch (trackpad: per 120 units)
+                self._step_zoom(1 if self._wheel_acc > 0 else -1)
+                self._wheel_acc -= 120 if self._wheel_acc > 0 else -120
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def _toggle_layout(self):
+        """V: with zoom on, swap between 'zoom large, camera inset' and 'side by side'."""
+        if self.views["zoom"]:
+            self.layout_mode = "split" if self.layout_mode == "inset" else "inset"
+            self._layout_views()
 
     def _toggle_engineer(self):
         self.engineer = not self.engineer
@@ -600,6 +709,8 @@ class ARWindow(QMainWindow):
         t2 = time.perf_counter()
 
         self._draw_overlays(frame, r)                 # drawing onto the numpy frame
+        if self.views["zoom"]:
+            self._render_zoom(clean, r, frame)        # separate view, redrawn at full resolution
 
         t3 = time.perf_counter()
 
@@ -631,10 +742,16 @@ class ARWindow(QMainWindow):
     # ---- rendering: draws the FrameResult onto the numpy frame ----
 
     def _draw_overlays(self, frame, r):
-        state, rvec, tvec = r.state, r.rvec, r.tvec
+        """Main view: engineer boxes, then the scene with the real camera matrix."""
         if self.engineer and r.ids is not None and len(r.ids) > 0:
             cv2.aruco.drawDetectedMarkers(frame, r.corners, r.ids,
                                           borderColor=(60, 160, 60))
+        self._draw_scene(frame, r, self.K, self.D)
+
+    def _draw_scene(self, frame, r, K, D, zoom=False):
+        """Draw the model and the selected pedicle onto `frame`, projected with camera matrix K.
+        The main view passes the camera's K; the zoom view passes a K that matches its crop."""
+        state, rvec, tvec = r.state, r.rvec, r.tvec
         if state not in ("VERIFYING", "NAVIGATING", "STALE"):
             return
 
@@ -643,14 +760,18 @@ class ARWindow(QMainWindow):
             # focused level bold with neighbours ghosted (or all levels
             # if no focus is set).
             sel = self.focus_level if state == "NAVIGATING" else None
-            draw_vertebra_layers(frame, self.vertebrae,
-                                 rvec, tvec, self.K, self.D, selected=sel)
+            if zoom:                                     # thicker line, exact faint fill
+                draw_vertebra_layers(frame, self.vertebrae, rvec, tvec, K, D,
+                                     selected=sel, style=ZOOM_STYLE, exact_fill=True)
+            else:
+                draw_vertebra_layers(frame, self.vertebrae,
+                                     rvec, tvec, K, D, selected=sel)
         elif (self.show_wire and self.mesh_verts is not None
                 and state != "STALE"):
             draw_wireframe(frame, self.mesh_verts,
                            self.mesh_edge_i0, self.mesh_edge_i1,
                            self.mesh_edge_normals,
-                           rvec, tvec, self.K, self.D, r.cam_pos)
+                           rvec, tvec, K, D, r.cam_pos)
 
         if state == "NAVIGATING" and r.tre_values is not None:
             # One pedicle selected: its entry, isthmus, trajectory and guide, nothing else.
@@ -678,12 +799,12 @@ class ARWindow(QMainWindow):
                 ia, ib = sel_.isthmus_idx, sel_.entry_idx
                 draw_focus_trajectory(
                     frame, self.target_pts[ib], self.target_pts[ia],
-                    rvec, tvec, self.K, self.D, status_colour=worse(ia, ib))
+                    rvec, tvec, K, D, status_colour=worse(ia, ib))
             else:
                 for ia, ib in self.traj_pairs:           # (isthmus, entry)
                     draw_overview_trajectory(
                         frame, self.target_pts[ib], self.target_pts[ia],
-                        rvec, tvec, self.K, self.D, status_colour=worse(ia, ib))
+                        rvec, tvec, K, D, status_colour=worse(ia, ib))
 
             _NoOpTR = type("_NR", (), {
                 "h": frame.shape[0], "w": frame.shape[1],
@@ -691,7 +812,7 @@ class ARWindow(QMainWindow):
                 "measure": lambda self, *a, **k: (0, 0),
             })()
             draw_targets(frame, f_pts, f_labels,
-                         f_tre, rvec, tvec, self.K, self.D,
+                         f_tre, rvec, tvec, K, D,
                          r.visible_ids, self.corner_lut, self.args.fle,
                          r.env_tier, _NoOpTR,
                          show_ell=self.show_ellipses and not focus,   # random-noise ellipses only in overview
@@ -701,7 +822,49 @@ class ARWindow(QMainWindow):
                 # true-scale 95 % error circle around the entry point
                 e = sel_.entry_idx
                 draw_error_circle(frame, self.target_pts[e], r95[e],
-                                  rvec, tvec, self.K, self.D, colour[e])
+                                  rvec, tvec, K, D, colour[e])
+
+    def _render_zoom(self, clean, r, frame):
+        """Zoom view: crop the clean camera frame around the selected entry point, magnify it,
+        and draw the same scene on it with the matching camera matrix."""
+        pane = self.zoom_pane
+        sel = self.selection
+        can_in, can_out = self.zoom_idx < len(FOV_STEPS) - 1, self.zoom_idx > 0
+        self.zoom_ctl.set_state(None, can_in, can_out)
+        if r.state != "NAVIGATING" or r.rvec is None:
+            pane.set_tag("ZOOM")
+            pane.show_message("Waiting for tracking")
+            return
+        if sel.is_overview:
+            pane.set_tag("ZOOM")
+            pane.show_message("Pick a pedicle\nW / S  A / D")
+            return
+        e = project_point(self.target_pts[sel.entry_idx], r.rvec, r.tvec, self.K, self.D)
+        if e is None:
+            pane.show_message("Entry point is behind the camera")
+            return
+        ppm = 0.5 * (self.K[0, 0] + self.K[1, 1]) / e[2]          # camera pixels per mm at the entry point
+        w, h = pane.render_size()
+        img, Kz, mag = zoom_frame(clean, self.K, (e[0], e[1]), ppm, w, h, FOV_STEPS[self.zoom_idx])
+        self._draw_scene(img, r, Kz, self.D, zoom=True)
+        pane.set_tag(f"ZOOM  {sel.name.upper()}  {FOV_STEPS[self.zoom_idx]:.0f} mm")
+        pane.show_frame(img)
+        self.zoom_ctl.set_state(mag, can_in, can_out)
+        # box on the camera view around the area the zoom is showing
+        fh = frame.shape[0]
+        x0, y0 = e[0] - w / (2.0 * mag), e[1] - h / (2.0 * mag)
+        p0 = (int(round(x0)), int(round(y0)))
+        p1 = (int(round(x0 + w / mag)), int(round(y0 + h / mag)))
+        t = max(3, fh // 220)
+        fw = frame.shape[1]
+        cx0, cy0, cx1, cy1 = max(p0[0], 0), max(p0[1], 0), min(p1[0], fw), min(p1[1], fh)
+        if cx1 > cx0 and cy1 > cy0:                    # faint teal fill so the box stands out
+            roi = frame[cy0:cy1, cx0:cx1]
+            tint = np.empty_like(roi)
+            tint[:] = BOX_BGR
+            cv2.addWeighted(roi, 1.0 - BOX_FILL, tint, BOX_FILL, 0, roi)
+        cv2.rectangle(frame, p0, p1, (0, 0, 0), t + 2, cv2.LINE_AA)
+        cv2.rectangle(frame, p0, p1, BOX_BGR, t, cv2.LINE_AA)
 
     # ---- HUD: pushes the FrameResult into the Qt widgets ----
 
@@ -798,7 +961,7 @@ class ARWindow(QMainWindow):
         if self.isFullScreen() or self.isMaximized():
             return
         avail = self.screen().availableGeometry()
-        vh = self.video_label.height()
+        vh = self.stage.height()
         vw = round(vh * fw / fh)
         total_w = self.rail.width() + vw
         if total_w > avail.width():                   # small screen: fit the width instead
@@ -812,12 +975,15 @@ class ARWindow(QMainWindow):
         h, w, _ = frame_bgr.shape
         if not self._fitted:
             self._fit_window_to_frame(w, h)
+        if abs(h / w - self._frame_aspect) > 1e-6:
+            self._frame_aspect = h / w
+            self._layout_views()
         # BGR -> RGB for Qt
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
         # Fit the whole frame inside the label (nothing cropped)
-        pix = pix.scaled(self.video_label.size(),
+        pix = pix.scaled(self.video_label.contentsRect().size(),
                          Qt.KeepAspectRatio,
                          Qt.FastTransformation)
         self.video_label.setPixmap(pix)
@@ -836,13 +1002,13 @@ class ARWindow(QMainWindow):
         elif k == Qt.Key_Escape:
             if self.help.isVisible():
                 self._toggle_help()
-        elif text == "?":
+        elif text in ("h", "?"):
             self._toggle_help()
         elif k == Qt.Key_P and shift:
             if self.engineer:
                 self.tracker.print_residuals = True      # debug, one-shot
             else:
-                print("Shift+P: turn on engineer mode (H) first")
+                print("Shift+P: turn on debug mode (M) first")
         # ---- selection: level, side, overview ----
         elif k in (Qt.Key_W, Qt.Key_Up):
             self._select(sel.step_level, -1)
@@ -865,11 +1031,19 @@ class ARWindow(QMainWindow):
             self.show_wire = not self.show_wire
         elif text == "e":
             self.show_ellipses = not self.show_ellipses
+        elif text == "z":
+            self._toggle_view("zoom")
+        elif text == "v":
+            self._toggle_layout()
+        elif text in ("+", "="):
+            self._step_zoom(+1)
+        elif text in ("-", "_"):
+            self._step_zoom(-1)
         elif text == "f":
             self._toggle_fullscreen()
         elif text == "p":
             self._save_screenshot()
-        elif text == "h":
+        elif text == "m":
             self._toggle_engineer()
         # ---- registration and logging ----
         elif text == "c":
@@ -884,8 +1058,14 @@ class ARWindow(QMainWindow):
 
     def _select(self, change, *args):
         """Run a Selection change (step_level, set_side, ...) and report it."""
+        was_overview = self.selection.is_overview
         if change(*args):
             print("Selected:", self.selection.name)
+            if AUTO_ZOOM:
+                if self.selection.is_overview and self.views["zoom"]:
+                    self._toggle_view("zoom")             # T / all levels: back to the full camera view
+                elif was_overview and not self.selection.is_overview and not self.views["zoom"]:
+                    self._toggle_view("zoom")             # first pedicle pick opens the zoom view
 
     def _save_screenshot(self):
         """Save raw frame (with on-frame overlays) and full window (with HUD)."""
