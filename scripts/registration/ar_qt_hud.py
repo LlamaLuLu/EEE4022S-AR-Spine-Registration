@@ -406,10 +406,8 @@ class ShortcutsPanel(QFrame):
     SHORTCUTS = [
         ("c", "confirm"),
         ("r", "reject"),
-        ("t", "trajectories"),
         ("e", "ellipses"),
         ("w", "wireframe"),
-        ("d", "detach"),
         ("g", "axis gizmo"),
         ("x", "target radar"),
         ("h", "toggle hud"),

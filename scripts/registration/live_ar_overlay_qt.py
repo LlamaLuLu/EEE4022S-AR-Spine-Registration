@@ -52,6 +52,7 @@ from ar_overlay import (
     draw_targets, draw_trajectories, draw_wireframe,
     is_in_envelope,
 )
+from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
 from ar_stl import (
     load_stl_for_wireframe, load_vertebra_meshes, level_from_label,
     draw_vertebra_layers, _blend_lines,
@@ -84,9 +85,6 @@ DEFAULT_VERTEBRAE_DIR = _REPO / "phantom" / "meshes" / "v3_overlay"
 DEFAULT_FALLBACK_STL = _REPO / "phantom" / "meshes" / "v2_print" / "spine_phantom_v2.stl"
 DEFAULT_ISTHMUS = _REPO / "annotations" / "pedicle_isthmus_targets.json"
 DEFAULT_ENTRY = _REPO / "annotations" / "pedicle_entry_targets.json"
-STALE_HOLD_SEC = 0.3
-VERIFY_COUNTDOWN_SEC = 2.0
-DETACH_OFFSET_PX = 60
 ROTATE_MAP = {0: None, 90: cv2.ROTATE_90_CLOCKWISE,
               180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 
@@ -127,7 +125,7 @@ def _blend_text(frame, txt, centre, angle_deg, colour, alpha, scale):
 
 
 def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
-                          doff=0, ext_mm=EXTENSION_MM, status_colour=None):
+                          ext_mm=EXTENSION_MM, status_colour=None):
     """
     Focus-mode trajectory for one pedicle, in the style of the 7D FLASH tool view:
       * beyond the entry point: a thick translucent blue guide band (the approach path)
@@ -155,9 +153,7 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
     def proj(pts):
         p, _ = cv2.projectPoints(np.asarray(pts, np.float64).reshape(-1, 1, 3),
                                  rvec, tvec, K, D)
-        p = p.reshape(-1, 2)
-        p[:, 1] -= doff
-        return p
+        return p.reshape(-1, 2)
 
     # ---- guide band beyond the entry, thin line inside the bone ----
     p_e = proj([entry, entry + axis * ext_mm, isth])
@@ -225,7 +221,7 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
 
 
 def draw_overview_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
-                             doff=0, ext_mm=OVERVIEW_EXT_MM, status_colour=None):
+                             ext_mm=OVERVIEW_EXT_MM, status_colour=None):
     """
     All-levels view: thin line from the isthmus through the entry point and on
     for ext_mm beyond it, so the approach direction is visible without the
@@ -244,7 +240,6 @@ def draw_overview_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
     p, _ = cv2.projectPoints(np.array([isth, entry, entry + axis * ext_mm], np.float64)
                              .reshape(-1, 1, 3), rvec, tvec, K, D)
     p = np.round(p.reshape(-1, 2)).astype(np.int32)
-    p[:, 1] -= int(doff)
     inner = p[[0, 1]].reshape(1, 2, 2)
     outer = p[[1, 2]].reshape(1, 2, 2)
     _blend_lines(frame, inner, (0, 0, 0), 0.45, w + 2)           # dark underlay for contrast
@@ -328,11 +323,6 @@ class ARWindow(QMainWindow):
                           for lv, ix in self.level_idx.items()}
         self.entry_idx = np.array([i for i, l in enumerate(self.target_labels)
                                    if "_E_" in l], dtype=int)
-        self.level_pairs = {}
-        for lv, ix in self.level_idx.items():
-            pos = {g: k for k, g in enumerate(ix)}
-            self.level_pairs[lv] = [(pos[a], pos[b]) for a, b in self.traj_pairs
-                                    if a in pos and b in pos]
 
         # --- Per-vertebra meshes (UI v2) ---
         self.vertebrae = None
@@ -434,13 +424,10 @@ class ARWindow(QMainWindow):
             ARUCO_DICT, cv2.aruco.DetectorParameters()
         )
 
-        # --- State ---
-        self.state = "SEARCHING"
-        self.prev_rvec = self.prev_tvec = None
-        self.last_good_time = self.verify_start_time = 0.0
-        self._pre_stale_state = None   # state to resume after a brief dropout
-        self.show_traj = self.show_ellipses = self.show_wire = True
-        self.detach = False
+        # --- Tracking (detection, PnP, state machine, TRE) ---
+        self.tracker = Tracker(self.detector, self.corner_lut, self.K, self.D,
+                               self.target_pts, args.fle, self.is_v3)
+        self.show_ellipses = self.show_wire = True
 
         # --- Timing instrumentation ---
         self._frame_count = 0
@@ -482,6 +469,10 @@ class ARWindow(QMainWindow):
         self.timer.start(33)
 
         print("Qt overlay running. Press 'q' or close window to quit.")
+
+    @property
+    def state(self):
+        return self.tracker.state
 
     def _build_ui(self):
         """Video label as central widget, HUD widgets as its children."""
@@ -620,244 +611,20 @@ class ARWindow(QMainWindow):
         t1 = time.perf_counter()
 
         now = time.time()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self.detector.detectMarkers(gray)
-
-        # --- Multi-marker PnP ---
-        pnp_ok = False
-        n_markers = 0
-        reproj_rms = float("nan")
-        distance_mm = elev_deg = az_deg = 0.0
-        cam_pos = np.zeros(3)
-        in_env = False
-        env_tier = "outside"
-        amb_rejected = False   # single-face solution discarded by the side check
-        tre_values = None
-        visible_ids = []
-        rvec = tvec = None
-
-        if ids is not None and len(ids) > 0:
-            cv2.aruco.drawDetectedMarkers(frame, corners, ids,
-                                          borderColor=(60, 160, 60))
-            pnp_ok, rvec, tvec, n_markers, reproj_rms = multi_marker_pnp(
-                ids, corners, self.corner_lut, self.K, self.D,
-                self.prev_rvec, self.prev_tvec,
-            )
-            if pnp_ok:
-                cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                visible_ids = [m for m in ids.flatten() if m in self.corner_lut]
-
-                # Reject mirrored PnP solution (planar ambiguity).
-                # The mirror places the camera hundreds of mm on the wrong
-                # side. Use generous margins (100mm) to allow oblique views.
-                if self.is_v3:
-                    face_a_only = all(m < 4 for m in visible_ids)
-                    face_b_only = all(m >= 4 for m in visible_ids)
-
-                    if face_a_only and cam_pos[2] > -103.7 + 100:
-                        pnp_ok = False  # camera way too cranial for Face A
-                        amb_rejected = True
-                    elif face_b_only and cam_pos[0] < 70.1 - 100:
-                        pnp_ok = False  # camera way too medial for Face B
-                        amb_rejected = True
-
-                # Per-marker reprojection error (debug: find geometry mismatches)
-                if pnp_ok and (reproj_rms > 5.0 or getattr(self, "_print_residuals", False)):
-                    self._print_residuals = False
-                    for mid, c2d in zip(ids.flatten(), corners):
-                        if mid in self.corner_lut:
-                            obj = self.corner_lut[mid]
-                            rep, _ = cv2.projectPoints(
-                                obj, rvec, tvec, self.K, self.D)
-                            err = np.linalg.norm(
-                                rep.reshape(4, 2) - c2d.reshape(4, 2), axis=1)
-                            print(f"  ID {mid}: reproj err = "
-                                  f"{err.mean():.1f}px (corners: "
-                                  f"{err.round(1).tolist()})")
-
-                if pnp_ok:
-                    self.prev_rvec, self.prev_tvec = rvec.copy(), tvec.copy()
-                    self.last_good_time = now
-                    env_tier = envelope_tier(elev_deg, az_deg, distance_mm) if self.is_v3 else "full"
-                    in_env = env_tier == "full"
-                    tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
-                                                    self.target_pts, self.args.fle)
-
-                    if self.state == "STALE":
-                        # Brief dropout recovered: resume where we were.
-                        # VERIFYING keeps its countdown, NAVIGATING stays put.
-                        self.state = self._pre_stale_state or "VERIFYING"
-                        self._pre_stale_state = None
-                    elif self.state == "SEARCHING":
-                        self.state = "VERIFYING"
-                        self.verify_start_time = now
-
-        # --- Stale / lost ---
-        if not pnp_ok:
-            if (self.prev_rvec is not None and
-                    (now - self.last_good_time) < STALE_HOLD_SEC):
-                if self.state not in ("SEARCHING", "STALE"):
-                    self._pre_stale_state = self.state
-                    self.state = "STALE"
-                rvec, tvec = self.prev_rvec, self.prev_tvec
-                cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                env_tier = envelope_tier(elev_deg, az_deg, distance_mm) if self.is_v3 else "reduced"
-                in_env = env_tier == "full"
-                tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
-                                                self.target_pts, self.args.fle)
-            else:
-                self.state = "SEARCHING"
-                self._pre_stale_state = None
-                self.prev_rvec = self.prev_tvec = None
-                visible_ids = []
-
-        # --- Verify countdown ---
-        if self.state == "VERIFYING":
-            if (now - self.verify_start_time) >= VERIFY_COUNTDOWN_SEC:
-                self.state = "NAVIGATING"
-                print("Registration confirmed (auto).")
+        r = self.tracker.process(frame, now)          # tracking: no drawing
 
         t2 = time.perf_counter()
 
-        # --- On-frame overlays (drawn onto numpy frame) ---
-        doff = DETACH_OFFSET_PX if self.detach else 0
-
-        if self.state in ("VERIFYING", "NAVIGATING", "STALE"):
-            if (self.show_wire and self.vertebrae is not None
-                    and self.state != "STALE"):
-                # UI v2: VERIFYING shows every level; NAVIGATING shows the
-                # focused level bold with neighbours ghosted (or all levels
-                # if no focus is set).
-                sel = self.focus_level if self.state == "NAVIGATING" else None
-                draw_vertebra_layers(frame, self.vertebrae,
-                                     rvec, tvec, self.K, self.D, selected=sel)
-            elif (self.show_wire and self.mesh_verts is not None
-                    and self.state != "STALE"):
-                draw_wireframe(frame, self.mesh_verts,
-                               self.mesh_edge_i0, self.mesh_edge_i1,
-                               self.mesh_edge_normals,
-                               rvec, tvec, self.K, self.D, cam_pos)
-
-            if self.state == "NAVIGATING" and tre_values is not None:
-                # Focus mode: one level shows entry, isthmus, trajectory and guide.
-                # All-levels mode: entry points and trajectory lines only.
-                fl = self.focus_level
-                focus = fl is not None and fl in self.level_idx
-                tre_arr = np.asarray(tre_values)
-                if focus:
-                    ix = self.level_idx[fl]
-                else:
-                    ix = self.entry_idx                      # isthmus dots hidden
-                f_pts = self.target_pts[ix]
-                f_labels = [self.target_labels[i] for i in ix]
-                f_tre = tre_arr[ix]
-
-                if self.show_traj:
-                    if focus:
-                        pos = {g: k for k, g in enumerate(ix)}
-                        for ia, ib in self.traj_pairs:       # (isthmus, entry)
-                            if ia in pos and ib in pos:
-                                # guide colour follows the worse of the two ends
-                                oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), env_tier)
-                                      if GUIDE_BY_STATUS else None)
-                                draw_focus_trajectory(
-                                    frame, self.target_pts[ib], self.target_pts[ia],
-                                    rvec, tvec, self.K, self.D, doff, status_colour=oc)
-                    else:
-                        for ia, ib in self.traj_pairs:       # (isthmus, entry)
-                            oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), env_tier)
-                                  if GUIDE_BY_STATUS else None)
-                            draw_overview_trajectory(
-                                frame, self.target_pts[ib], self.target_pts[ia],
-                                rvec, tvec, self.K, self.D, doff, status_colour=oc)
-
-                _NoOpTR = type("_NR", (), {
-                    "h": frame.shape[0], "w": frame.shape[1],
-                    "text": lambda self, *a, **k: None,
-                    "measure": lambda self, *a, **k: (0, 0),
-                })()
-                draw_targets(frame, f_pts, f_labels,
-                             f_tre, rvec, tvec, self.K, self.D,
-                             visible_ids, self.corner_lut, self.args.fle,
-                             env_tier, _NoOpTR, self.show_ellipses, doff,
-                             (0, 0, 0) if (MARKERS_BLACK and focus) else None)
+        self._draw_overlays(frame, r)                 # drawing onto the numpy frame
 
         t3 = time.perf_counter()
 
-        # --- Update Qt widgets (only if values changed) ---
-        self.status_panel.update_values(n_markers, pnp_ok, reproj_rms)
-        self.status_panel.set_accent({
-            "SEARCHING": "stale",
-            "VERIFYING": "default",
-            "NAVIGATING": "good",
-            "STALE": "bad",
-        }.get(self.state, "default"))
-
-        self.pose_panel.update_values(distance_mm, elev_deg, az_deg, env_tier)
-        self.pose_panel.set_accent(
-            {"full": "good", "reduced": "warn"}.get(env_tier, "bad"))
-
-        tp_vals, tp_labels = tre_values, self.target_labels
-        if (self.focus_level is not None and self.state == "NAVIGATING"
-                and tre_values is not None and self.focus_level in self.level_idx):
-            # Focus mode: show the selected vertebra's entry point nearest the camera.
-            ent = [i for i in self.level_idx[self.focus_level]
-                   if "_E_" in self.target_labels[i]]
-            if ent:
-                j = min(ent, key=lambda i: np.linalg.norm(self.target_pts[i] - cam_pos))
-                tp_vals = np.asarray(tre_values)[[j]]
-                tp_labels = [self.target_labels[j]]
-        self.tre_panel.update_values(tp_vals, tp_labels, env_tier)
-
-        # State pill
-        countdown = 0.0
-        if self.state == "VERIFYING":
-            countdown = VERIFY_COUNTDOWN_SEC - (now - self.verify_start_time)
-        self.state_pill.set_state(self.state, countdown)
-
-        # Axis triad
-        if self._show_triad and pnp_ok and self.state != "SEARCHING":
-            self.axis_triad.set_rvec(rvec)
-            if not self.axis_triad.isVisible():
-                self.axis_triad.show()
-        else:
-            self.axis_triad.set_rvec(None)
-
-        # Target radar
-        if self._show_radar and self.state == "NAVIGATING":
-            self.target_radar.set_tre_values(tre_values, self.target_labels, env_tier)
-            if not self.target_radar.isVisible():
-                self.target_radar.show()
-        else:
-            self.target_radar.set_tre_values(None, [], env_tier)
-
-        self._update_focus_label()
-
-        # Reposition state pill (its width changes with countdown text)
-        w = self.width()
-        self.state_pill.move((w - self.state_pill.width()) // 2,
-                             max(int(self.height() * 0.02), 12))
+        self._update_widgets(r)                       # Qt HUD
 
         # --- Push frame to video label ---
         self._last_frame_bgr = frame.copy()
         self._last_clean_bgr = clean
-        if rvec is not None:
-            self._last_pose = {
-                "rvec": np.asarray(rvec).ravel().tolist(),
-                "tvec": np.asarray(tvec).ravel().tolist(),
-                "state": self.state,
-                "pnp_ok": bool(pnp_ok),
-                "n_markers": int(n_markers),
-                "rms_px": None if np.isnan(reproj_rms) else float(reproj_rms),
-                "visible_ids": [int(i) for i in visible_ids],
-                "distance_mm": float(distance_mm),
-                "elevation_deg": float(elev_deg),
-                "azimuth_deg": float(az_deg),
-                "env_tier": env_tier,
-                "focus_level": self.focus_level,
-            }
-        else:
-            self._last_pose = None
+        self._last_pose = self._pose_dict(r)
         self._show_frame(frame)
 
         t4 = time.perf_counter()
@@ -875,24 +642,166 @@ class ARWindow(QMainWindow):
             self._frame_count = 0
             self._last_log = t4
 
-        # --- CSV data log (every frame) ---
-        if self._csv_writer is not None:
-            tre_vals = []
-            if tre_values is not None:
-                tre_vals = [f"{v:.3f}" for v in tre_values]
+        self._log_row(r, (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+
+    # ---- rendering: draws the FrameResult onto the numpy frame ----
+
+    def _draw_overlays(self, frame, r):
+        state, rvec, tvec = r.state, r.rvec, r.tvec
+        if r.ids is not None and len(r.ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, r.corners, r.ids,
+                                          borderColor=(60, 160, 60))
+        if state not in ("VERIFYING", "NAVIGATING", "STALE"):
+            return
+
+        if self.show_wire and self.vertebrae is not None and state != "STALE":
+            # UI v2: VERIFYING shows every level; NAVIGATING shows the
+            # focused level bold with neighbours ghosted (or all levels
+            # if no focus is set).
+            sel = self.focus_level if state == "NAVIGATING" else None
+            draw_vertebra_layers(frame, self.vertebrae,
+                                 rvec, tvec, self.K, self.D, selected=sel)
+        elif (self.show_wire and self.mesh_verts is not None
+                and state != "STALE"):
+            draw_wireframe(frame, self.mesh_verts,
+                           self.mesh_edge_i0, self.mesh_edge_i1,
+                           self.mesh_edge_normals,
+                           rvec, tvec, self.K, self.D, r.cam_pos)
+
+        if state == "NAVIGATING" and r.tre_values is not None:
+            # Focus mode: one level shows entry, isthmus, trajectory and guide.
+            # All-levels mode: entry points and trajectory lines only.
+            fl = self.focus_level
+            focus = fl is not None and fl in self.level_idx
+            tre_arr = np.asarray(r.tre_values)
+            if focus:
+                ix = self.level_idx[fl]
             else:
-                tre_vals = [""] * len(self.target_labels)
-            self._csv_writer.writerow([
-                f"{now:.3f}", self._step, self.state, n_markers, pnp_ok,
-                f"{reproj_rms:.2f}" if not np.isnan(reproj_rms) else "",
-                f"{distance_mm:.1f}", f"{elev_deg:.1f}", f"{az_deg:.1f}",
-                f"{cam_pos[0]:.1f}", f"{cam_pos[1]:.1f}", f"{cam_pos[2]:.1f}",
-                in_env, env_tier, int(amb_rejected),
-                f"{(t1-t0)*1000:.1f}", f"{(t2-t1)*1000:.1f}",
-                f"{(t3-t2)*1000:.1f}", f"{(t4-t3)*1000:.1f}",
-                "|".join(str(i) for i in visible_ids),
-            ] + tre_vals)
-            self._csv_file.flush()
+                ix = self.entry_idx                      # isthmus dots hidden
+            f_pts = self.target_pts[ix]
+            f_labels = [self.target_labels[i] for i in ix]
+            f_tre = tre_arr[ix]
+
+            if focus:
+                pos = {g: k for k, g in enumerate(ix)}
+                for ia, ib in self.traj_pairs:           # (isthmus, entry)
+                    if ia in pos and ib in pos:
+                        # guide colour follows the worse of the two ends
+                        oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), r.env_tier)
+                              if GUIDE_BY_STATUS else None)
+                        draw_focus_trajectory(
+                            frame, self.target_pts[ib], self.target_pts[ia],
+                            rvec, tvec, self.K, self.D, status_colour=oc)
+            else:
+                for ia, ib in self.traj_pairs:           # (isthmus, entry)
+                    oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), r.env_tier)
+                          if GUIDE_BY_STATUS else None)
+                    draw_overview_trajectory(
+                        frame, self.target_pts[ib], self.target_pts[ia],
+                        rvec, tvec, self.K, self.D, status_colour=oc)
+
+            _NoOpTR = type("_NR", (), {
+                "h": frame.shape[0], "w": frame.shape[1],
+                "text": lambda self, *a, **k: None,
+                "measure": lambda self, *a, **k: (0, 0),
+            })()
+            draw_targets(frame, f_pts, f_labels,
+                         f_tre, rvec, tvec, self.K, self.D,
+                         r.visible_ids, self.corner_lut, self.args.fle,
+                         r.env_tier, _NoOpTR, self.show_ellipses,
+                         marker_col=(0, 0, 0) if (MARKERS_BLACK and focus) else None)
+
+    # ---- HUD: pushes the FrameResult into the Qt widgets ----
+
+    def _update_widgets(self, r):
+        self.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
+        self.status_panel.set_accent({
+            "SEARCHING": "stale",
+            "VERIFYING": "default",
+            "NAVIGATING": "good",
+            "STALE": "bad",
+        }.get(r.state, "default"))
+
+        self.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
+        self.pose_panel.set_accent(
+            {"full": "good", "reduced": "warn"}.get(r.env_tier, "bad"))
+
+        tp_vals, tp_labels = r.tre_values, self.target_labels
+        if (self.focus_level is not None and r.state == "NAVIGATING"
+                and r.tre_values is not None and self.focus_level in self.level_idx):
+            # Focus mode: show the selected vertebra's entry point nearest the camera.
+            ent = [i for i in self.level_idx[self.focus_level]
+                   if "_E_" in self.target_labels[i]]
+            if ent:
+                j = min(ent, key=lambda i: np.linalg.norm(self.target_pts[i] - r.cam_pos))
+                tp_vals = np.asarray(r.tre_values)[[j]]
+                tp_labels = [self.target_labels[j]]
+        self.tre_panel.update_values(tp_vals, tp_labels, r.env_tier)
+
+        self.state_pill.set_state(r.state, r.verify_remaining)
+
+        # Axis triad
+        if self._show_triad and r.pnp_ok and r.state != "SEARCHING":
+            self.axis_triad.set_rvec(r.rvec)
+            if not self.axis_triad.isVisible():
+                self.axis_triad.show()
+        else:
+            self.axis_triad.set_rvec(None)
+
+        # Target radar
+        if self._show_radar and r.state == "NAVIGATING":
+            self.target_radar.set_tre_values(r.tre_values, self.target_labels, r.env_tier)
+            if not self.target_radar.isVisible():
+                self.target_radar.show()
+        else:
+            self.target_radar.set_tre_values(None, [], r.env_tier)
+
+        self._update_focus_label()
+
+        # Reposition state pill (its width changes with countdown text)
+        w = self.width()
+        self.state_pill.move((w - self.state_pill.width()) // 2,
+                             max(int(self.height() * 0.02), 12))
+
+    def _pose_dict(self, r):
+        """Pose and status saved next to screenshots (None if there is no pose)."""
+        if r.rvec is None:
+            return None
+        return {
+            "rvec": np.asarray(r.rvec).ravel().tolist(),
+            "tvec": np.asarray(r.tvec).ravel().tolist(),
+            "state": r.state,
+            "pnp_ok": bool(r.pnp_ok),
+            "n_markers": int(r.n_markers),
+            "rms_px": None if np.isnan(r.reproj_rms) else float(r.reproj_rms),
+            "visible_ids": [int(i) for i in r.visible_ids],
+            "distance_mm": float(r.distance_mm),
+            "elevation_deg": float(r.elev_deg),
+            "azimuth_deg": float(r.az_deg),
+            "env_tier": r.env_tier,
+            "focus_level": self.focus_level,
+        }
+
+    def _log_row(self, r, dts):
+        """One CSV row per frame (ATP logging). dts = grab, detect+pnp, overlay, qt seconds."""
+        if self._csv_writer is None:
+            return
+        if r.tre_values is not None:
+            tre_vals = [f"{v:.3f}" for v in r.tre_values]
+        else:
+            tre_vals = [""] * len(self.target_labels)
+        cam = r.cam_pos
+        self._csv_writer.writerow([
+            f"{r.now:.3f}", self._step, r.state, r.n_markers, r.pnp_ok,
+            f"{r.reproj_rms:.2f}" if not np.isnan(r.reproj_rms) else "",
+            f"{r.distance_mm:.1f}", f"{r.elev_deg:.1f}", f"{r.az_deg:.1f}",
+            f"{cam[0]:.1f}", f"{cam[1]:.1f}", f"{cam[2]:.1f}",
+            r.in_env, r.env_tier, int(r.amb_rejected),
+            f"{dts[0]*1000:.1f}", f"{dts[1]*1000:.1f}",
+            f"{dts[2]*1000:.1f}", f"{dts[3]*1000:.1f}",
+            "|".join(str(i) for i in r.visible_ids),
+        ] + tre_vals)
+        self._csv_file.flush()
 
     def _show_frame(self, frame_bgr):
         """Convert BGR numpy frame to QPixmap and set on the video label."""
@@ -920,8 +829,6 @@ class ARWindow(QMainWindow):
             # Toggle shortcuts panel
             self._show_shortcuts = not self._show_shortcuts
             self.shortcuts_panel.setVisible(self._show_shortcuts)
-        elif text == "t":
-            self.show_traj = not self.show_traj
         elif text == "e":
             self.show_ellipses = not self.show_ellipses
         elif text == "w":
@@ -936,8 +843,6 @@ class ARWindow(QMainWindow):
             self._step_focus(-1)
         elif text in (",", ".") and isinstance(self.grabber.cap, ReplayCapture):
             print("Replay:", self.grabber.cap.step(-1 if text == "," else +1))
-        elif text == "d":
-            self.detach = not self.detach
         elif text == "g":
             self._show_triad = not self._show_triad
             self.axis_triad.setVisible(self._show_triad)
@@ -954,19 +859,17 @@ class ARWindow(QMainWindow):
                 self.showNormal()
             else:
                 self.showFullScreen()
-        elif text == "c" and self.state == "VERIFYING":
-            self.state = "NAVIGATING"
-            print("Registration confirmed (manual).")
+        elif text == "c":
+            self.tracker.confirm()
         elif text == "r":
-            self.state = "SEARCHING"
-            self.prev_rvec = self.prev_tvec = None
+            self.tracker.reset()
         elif text == "s":
             self._save_screenshot()
         elif text == "n":
             self._step += 1
             print(f"--- step {self._step} ---")
         elif text == "p":
-            self._print_residuals = True
+            self.tracker.print_residuals = True
 
     def _set_focus(self, level):
         """Focus one vertebra level (1-5), or None for all levels."""
