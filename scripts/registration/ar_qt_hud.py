@@ -251,7 +251,7 @@ class TrePanel(HudPanel):
         layout.setSpacing(8)
 
         tgt_row, self._tgt_val = _row("Target", "--")
-        tre_row, self._tre_val = _row("TRE", "--")
+        tre_row, self._tre_val = _row("Error (95%)", "--")
 
         # Legend row
         legend = QWidget()
@@ -260,9 +260,11 @@ class TrePanel(HudPanel):
         legend_layout.setContentsMargins(0, 4, 0, 0)
         legend_layout.setSpacing(16)
 
-        for colour_hex, text in [("#64D28C", "< 1.0mm"),
-                                 ("#EBB450", "1.0-2.0mm"),
-                                 ("#D75A5A", "> 2.0mm")]:
+        for colour_hex, text in [
+                ("#64D28C", "≤ 3.0 mm"), 
+                ("#EBB450", "3.0-4.0 mm"), 
+                ("#D75A5A", "> 4.0 mm")
+            ]:
             item = QWidget()
             item.setAttribute(Qt.WA_TranslucentBackground, True)
             il = QHBoxLayout(item)
@@ -325,6 +327,18 @@ class TrePanel(HudPanel):
             self._tre_val.setText(tre_str)
             self._set_status(self._tre_val, status)
             self._last["tre"] = (tre_str, status)
+
+    def update_error(self, label, r95_mm, status):
+        bl = label or "--"
+        text = f"±{r95_mm:.1f} mm" if r95_mm is not None else "--"
+        if self._last["tgt"] != (bl, status):
+            self._tgt_val.setText(bl)
+            self._set_status(self._tgt_val, status)
+            self._last["tgt"] = (bl, status)
+        if self._last["tre"] != (text, status):
+            self._tre_val.setText(text)
+            self._set_status(self._tre_val, status)
+            self._last["tre"] = (text, status)
 
 
 # ====================================================================
@@ -404,17 +418,18 @@ class ShortcutsPanel(QFrame):
     """
 
     SHORTCUTS = [
+        ("w / s", "level"), 
+        ("a / d", "side"), 
+        ("t", "all levels"),
+        ("y", "wireframe"),
+        ("e", "ellipses"),
+        ("p", "photo"),
         ("c", "confirm"),
         ("r", "reject"),
-        ("e", "ellipses"),
-        ("w", "wireframe"),
+        ("h", "toggle hud"),
         ("g", "axis gizmo"),
         ("x", "target radar"),
-        ("h", "toggle hud"),
         ("f", "fullscreen"),
-        ("s", "screenshot"),
-        ("n", "next step"),
-        ("p", "print marker residuals"),
         ("esc", "toggle help"),
         ("q", "quit"),
     ]

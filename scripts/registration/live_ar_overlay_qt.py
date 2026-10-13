@@ -17,9 +17,11 @@ Usage (from repo root):
         --marker-map data/bracket_markers/marker_map.json \
         --stl phantom/meshes/v1_print/BASE_v1.4.stl
 
-UI v2 (per-vertebra focus) is the default: the per-vertebra meshes in
-phantom/meshes/v3_overlay are loaded automatically. Keys: 1-5 focus one level,
-A (or 0) shows all levels, Left/Right arrows (or [ and ]) step through levels.
+UI v2 (pedicle selection) is the default: the per-vertebra meshes in
+phantom/meshes/v3_overlay are loaded automatically. Select one pedicle at a
+time. Keys: W/S or Up/Down step the vertebra, A/D or Left/Right pick the side,
+1-5 jump to a level, [ and ] walk the ten pedicles in order, T (or 0) shows all
+levels, Y wireframe, F fullscreen, P photo, Shift+P prints per-marker residuals.
 If those meshes are missing or fail to load, the original single-mesh
 wireframe (--stl) is used instead. Pass --vertebrae-dir none to force it.
 """
@@ -53,11 +55,14 @@ from ar_overlay import (
     is_in_envelope,
 )
 from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
+from ar_selection import Selection
+from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
+                      draw_error_circle)
 from ar_stl import (
-    load_stl_for_wireframe, load_vertebra_meshes, level_from_label,
+    load_stl_for_wireframe, load_vertebra_meshes,
     draw_vertebra_layers, _blend_lines,
 )
-from ar_theme import envelope_tier, tre_colour
+from ar_theme import envelope_tier
 
 # Qt HUD
 from ar_qt_styles import QSS
@@ -312,21 +317,14 @@ class ARWindow(QMainWindow):
         print(f"Targets: {len(self.target_pts)}, "
               f"trajectory pairs: {len(self.traj_pairs)}")
 
-        # Per-level index (for focus mode): level -> target indices, and
-        # (isthmus, entry) pairs remapped into each level's sub-array.
-        self.level_idx = {}
-        for i, lbl in enumerate(self.target_labels):
-            lv, _side = level_from_label(lbl)
-            if lv is not None:
-                self.level_idx.setdefault(lv, []).append(i)
-        self.level_idx = {lv: np.array(ix, dtype=int)
-                          for lv, ix in self.level_idx.items()}
-        self.entry_idx = np.array([i for i, l in enumerate(self.target_labels)
-                                   if "_E_" in l], dtype=int)
+        # Which pedicle is selected (single source of truth for keys, rail, clicks)
+        self.selection = Selection(self.target_labels)
+        self.entry_idx = np.array(self.selection.all_entry_idx, dtype=int)
+        # Validated error anchor for this board (see ar_error.py)
+        self.anchor = ANCHORS["bracket" if self.is_v3 else "dome"]
 
         # --- Per-vertebra meshes (UI v2) ---
         self.vertebrae = None
-        self.focus_level = None          # None = show all levels
         vdir = args.vertebrae_dir
         if str(vdir).lower() not in ("none", "off", ""):
             try:
@@ -574,23 +572,28 @@ class ARWindow(QMainWindow):
                               self.height() - self.focus_label.height()
                               - max(int(self.height() * 0.02), 12))
 
+    @property
+    def focus_level(self):
+        return self.selection.level
+
     def _update_focus_label(self):
-        show = (self.vertebrae is not None and self.state == "NAVIGATING"
-                and self.focus_level is not None)
-        if show:
-            levels = sorted(self.level_idx)
-            k = levels.index(self.focus_level)
-            prev_t = f"L{levels[k - 1]}" if k > 0 else "all levels"
-            next_t = f"L{levels[k + 1]}" if k < len(levels) - 1 else "all levels"
-            txt = (f"FOCUS  L{self.focus_level}      "
-                   f"Left/Up: {prev_t}    Right/Down: {next_t}    A: all levels")
-            if self.focus_label.text() != txt:
-                self.focus_label.setText(txt)
-                self._place_focus_label()
-            self.focus_label.show()
-            self.focus_label.raise_()
-        elif self.focus_label.isVisible():
-            self.focus_label.hide()
+        if self.state != "NAVIGATING":
+            if self.focus_label.isVisible():
+                self.focus_label.hide()
+            return
+        sel = self.selection
+        if sel.is_overview:
+            txt = "ALL LEVELS      W/S or A/D: select a pedicle"
+        else:
+            prev_l, next_l = sel.neighbour_levels()
+            txt = (f"{sel.name.upper()}      "
+                   f"W/S: {'L%d' % prev_l if prev_l else '-'} / {'L%d' % next_l if next_l else '-'}    "
+                   f"A/D: left / right    T: all levels")
+        if self.focus_label.text() != txt:
+            self.focus_label.setText(txt)
+            self._place_focus_label()
+        self.focus_label.show()
+        self.focus_label.raise_()
 
     # ================================================================
     # Frame loop
@@ -669,36 +672,37 @@ class ARWindow(QMainWindow):
                            rvec, tvec, self.K, self.D, r.cam_pos)
 
         if state == "NAVIGATING" and r.tre_values is not None:
-            # Focus mode: one level shows entry, isthmus, trajectory and guide.
-            # All-levels mode: entry points and trajectory lines only.
-            fl = self.focus_level
-            focus = fl is not None and fl in self.level_idx
-            tre_arr = np.asarray(r.tre_values)
+            # One pedicle selected: its entry, isthmus, trajectory and guide, nothing else.
+            # Overview: every entry point with a thin trajectory line.
+            # Colours grade the expected 95 % error (measured, see ar_error.py),
+            # not the raw predicted TRE.
+            sel_ = self.selection
+            focus = not sel_.is_overview
+            r95 = error_radius95(np.asarray(r.tre_values), self.anchor)
+            status = [grade(v, r.env_tier) for v in r95]
+            colour = [grade_colour(st) for st in status]
             if focus:
-                ix = self.level_idx[fl]
+                ix = np.array([sel_.isthmus_idx, sel_.entry_idx], dtype=int)
             else:
                 ix = self.entry_idx                      # isthmus dots hidden
             f_pts = self.target_pts[ix]
             f_labels = [self.target_labels[i] for i in ix]
-            f_tre = tre_arr[ix]
+            f_tre = np.asarray(r.tre_values)[ix]
+            f_col = [colour[i] for i in ix]
+
+            def worse(ia, ib):                           # guide takes the worse end
+                return colour[ia if r95[ia] >= r95[ib] else ib] if GUIDE_BY_STATUS else None
 
             if focus:
-                pos = {g: k for k, g in enumerate(ix)}
-                for ia, ib in self.traj_pairs:           # (isthmus, entry)
-                    if ia in pos and ib in pos:
-                        # guide colour follows the worse of the two ends
-                        oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), r.env_tier)
-                              if GUIDE_BY_STATUS else None)
-                        draw_focus_trajectory(
-                            frame, self.target_pts[ib], self.target_pts[ia],
-                            rvec, tvec, self.K, self.D, status_colour=oc)
+                ia, ib = sel_.isthmus_idx, sel_.entry_idx
+                draw_focus_trajectory(
+                    frame, self.target_pts[ib], self.target_pts[ia],
+                    rvec, tvec, self.K, self.D, status_colour=worse(ia, ib))
             else:
                 for ia, ib in self.traj_pairs:           # (isthmus, entry)
-                    oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), r.env_tier)
-                          if GUIDE_BY_STATUS else None)
                     draw_overview_trajectory(
                         frame, self.target_pts[ib], self.target_pts[ia],
-                        rvec, tvec, self.K, self.D, status_colour=oc)
+                        rvec, tvec, self.K, self.D, status_colour=worse(ia, ib))
 
             _NoOpTR = type("_NR", (), {
                 "h": frame.shape[0], "w": frame.shape[1],
@@ -708,8 +712,15 @@ class ARWindow(QMainWindow):
             draw_targets(frame, f_pts, f_labels,
                          f_tre, rvec, tvec, self.K, self.D,
                          r.visible_ids, self.corner_lut, self.args.fle,
-                         r.env_tier, _NoOpTR, self.show_ellipses,
-                         marker_col=(0, 0, 0) if (MARKERS_BLACK and focus) else None)
+                         r.env_tier, _NoOpTR,
+                         show_ell=self.show_ellipses and not focus,   # random-noise ellipses only in overview
+                         marker_col=(0, 0, 0) if (MARKERS_BLACK and focus) else None,
+                         colours=f_col)
+            if focus and self.show_ellipses:
+                # true-scale 95 % error circle around the entry point
+                e = sel_.entry_idx
+                draw_error_circle(frame, self.target_pts[e], r95[e],
+                                  rvec, tvec, self.K, self.D, colour[e])
 
     # ---- HUD: pushes the FrameResult into the Qt widgets ----
 
@@ -726,17 +737,8 @@ class ARWindow(QMainWindow):
         self.pose_panel.set_accent(
             {"full": "good", "reduced": "warn"}.get(r.env_tier, "bad"))
 
-        tp_vals, tp_labels = r.tre_values, self.target_labels
-        if (self.focus_level is not None and r.state == "NAVIGATING"
-                and r.tre_values is not None and self.focus_level in self.level_idx):
-            # Focus mode: show the selected vertebra's entry point nearest the camera.
-            ent = [i for i in self.level_idx[self.focus_level]
-                   if "_E_" in self.target_labels[i]]
-            if ent:
-                j = min(ent, key=lambda i: np.linalg.norm(self.target_pts[i] - r.cam_pos))
-                tp_vals = np.asarray(r.tre_values)[[j]]
-                tp_labels = [self.target_labels[j]]
-        self.tre_panel.update_values(tp_vals, tp_labels, r.env_tier)
+        label, r95_mm, status = self._error_summary(r)
+        self.tre_panel.update_error(label, r95_mm, status)
 
         self.state_pill.set_state(r.state, r.verify_remaining)
 
@@ -763,6 +765,20 @@ class ARWindow(QMainWindow):
         self.state_pill.move((w - self.state_pill.width()) // 2,
                              max(int(self.height() * 0.02), 12))
 
+    def _error_summary(self, r):
+        """(target label, 95 % error mm, status) for the HUD.
+        One pedicle selected: its entry point. Overview: the worst entry point."""
+        if r.tre_values is None or r.state == "SEARCHING":
+            return "--", None, "muted"
+        r95 = error_radius95(np.asarray(r.tre_values), self.anchor)
+        if self.selection.is_overview:
+            j = int(self.entry_idx[np.argmax(r95[self.entry_idx])])
+        else:
+            j = self.selection.entry_idx
+        if not np.isfinite(r95[j]):
+            return "--", None, "muted"
+        return self.target_labels[j], float(r95[j]), grade(r95[j], r.env_tier)
+
     def _pose_dict(self, r):
         """Pose and status saved next to screenshots (None if there is no pose)."""
         if r.rvec is None:
@@ -779,7 +795,9 @@ class ARWindow(QMainWindow):
             "elevation_deg": float(r.elev_deg),
             "azimuth_deg": float(r.az_deg),
             "env_tier": r.env_tier,
-            "focus_level": self.focus_level,
+            "focus_level": self.selection.level,
+            "focus_side": self.selection.side,
+            "expected_error_95_mm": self._error_summary(r)[1],
         }
 
     def _log_row(self, r, dts):
@@ -823,71 +841,71 @@ class ARWindow(QMainWindow):
     def keyPressEvent(self, event: QKeyEvent):
         k = event.key()
         text = event.text().lower()
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
+        sel = self.selection
         if text == "q":
             self.close()
         elif k == Qt.Key_Escape:
             # Toggle shortcuts panel
             self._show_shortcuts = not self._show_shortcuts
             self.shortcuts_panel.setVisible(self._show_shortcuts)
+        elif k == Qt.Key_P and shift:
+            self.tracker.print_residuals = True          # debug, one-shot
+        # ---- selection: level, side, overview ----
+        elif k in (Qt.Key_W, Qt.Key_Up):
+            self._select(sel.step_level, -1)
+        elif k in (Qt.Key_S, Qt.Key_Down):
+            self._select(sel.step_level, +1)
+        elif k in (Qt.Key_A, Qt.Key_Left):
+            self._select(sel.set_side, "L")
+        elif k in (Qt.Key_D, Qt.Key_Right):
+            self._select(sel.set_side, "R")
+        elif text in ("1", "2", "3", "4", "5"):
+            self._select(sel.select, int(text))
+        elif text == "]":
+            self._select(sel.step_pedicle, +1)
+        elif text == "[":
+            self._select(sel.step_pedicle, -1)
+        elif text in ("t", "0"):
+            self._select(sel.overview)
+        # ---- view and tools ----
+        elif text == "y":
+            self.show_wire = not self.show_wire
         elif text == "e":
             self.show_ellipses = not self.show_ellipses
-        elif text == "w":
-            self.show_wire = not self.show_wire
-        elif text in ("1", "2", "3", "4", "5"):
-            self._set_focus(int(text))
-        elif text in ("a", "0"):
-            self._set_focus(None)
-        elif k in (Qt.Key_Right, Qt.Key_Down) or text == "]":
-            self._step_focus(+1)
-        elif k in (Qt.Key_Left, Qt.Key_Up) or text == "[":
-            self._step_focus(-1)
-        elif text in (",", ".") and isinstance(self.grabber.cap, ReplayCapture):
-            print("Replay:", self.grabber.cap.step(-1 if text == "," else +1))
+        elif text == "f":
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
+        elif text == "p":
+            self._save_screenshot()
+        elif text == "h":
+            # Toggle all HUD panels
+            for widget in [self.status_panel, self.pose_panel, self.tre_panel,
+                           self.state_pill]:
+                widget.setVisible(not widget.isVisible())
         elif text == "g":
             self._show_triad = not self._show_triad
             self.axis_triad.setVisible(self._show_triad)
         elif text == "x":
             self._show_radar = not self._show_radar
             self.target_radar.setVisible(self._show_radar)
-        elif text == "h":
-            # Toggle all HUD panels
-            for widget in [self.status_panel, self.pose_panel, self.tre_panel,
-                           self.state_pill]:
-                widget.setVisible(not widget.isVisible())
-        elif text == "f":
-            if self.isFullScreen():
-                self.showNormal()
-            else:
-                self.showFullScreen()
+        # ---- registration and logging ----
         elif text == "c":
             self.tracker.confirm()
         elif text == "r":
             self.tracker.reset()
-        elif text == "s":
-            self._save_screenshot()
         elif text == "n":
             self._step += 1
             print(f"--- step {self._step} ---")
-        elif text == "p":
-            self.tracker.print_residuals = True
+        elif text in (",", ".") and isinstance(self.grabber.cap, ReplayCapture):
+            print("Replay:", self.grabber.cap.step(-1 if text == "," else +1))
 
-    def _set_focus(self, level):
-        """Focus one vertebra level (1-5), or None for all levels."""
-        if level is not None and level not in self.level_idx:
-            print(f"No targets for L{level}")
-            return
-        self.focus_level = level
-        print("Focus:", "all levels" if level is None else f"L{level}")
-
-    def _step_focus(self, delta):
-        levels = sorted(self.level_idx)
-        if not levels:
-            return
-        if self.focus_level is None:
-            self._set_focus(levels[0] if delta > 0 else levels[-1])
-        else:
-            k = levels.index(self.focus_level) + delta
-            self._set_focus(levels[k] if 0 <= k < len(levels) else None)
+    def _select(self, change, *args):
+        """Run a Selection change (step_level, set_side, ...) and report it."""
+        if change(*args):
+            print("Selected:", self.selection.name)
 
     def _save_screenshot(self):
         """Save raw frame (with on-frame overlays) and full window (with HUD)."""
