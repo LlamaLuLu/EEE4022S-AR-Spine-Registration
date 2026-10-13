@@ -309,7 +309,8 @@ HELP_ROWS = [
     ("View", [("Z", "zoom view on / off"),
               ("+ / -", "zoom in / out (or mouse wheel)"),
               ("X", "axial view on / off"),
-              ("V", "zoom layout: inset / side by side"),
+              ("L", "sagittal view on / off"),
+              ("V", "axial / sagittal: beside the view / in the rail"),
               ("Y", "bone outline on / off"),
               ("E", "error circle on / off"),
               ("F", "fullscreen"),
@@ -372,7 +373,7 @@ class Rail(QFrame):
         v.addWidget(self.selector)
         self.card = TargetCard()                     # the selected pedicle and its expected error
         v.addWidget(self.card)
-        self.views_menu = ViewsMenu([("zoom", "Zoom   Z"), ("axial", "Axial   X")])
+        self.views_menu = ViewsMenu([("zoom", "Zoom   Z"), ("axial", "Axial   X"), ("sagittal", "Sagittal   L")])
         self.views_menu.toggled.connect(self.viewToggled.emit)
         v.addWidget(self.views_menu)
 
@@ -391,11 +392,20 @@ class Rail(QFrame):
         self.engineer_box.hide()
         v.addWidget(self.engineer_box)
 
-        # axial view: takes the free space between the views list and the bottom links
-        self.axial_pane = ViewPane("AXIAL")
-        self.axial_pane.setMinimumSize(110, 110)
-        self.axial_pane.hide()
-        v.addWidget(self.axial_pane, 100)
+        # axial and sagittal views: share the free space between the views list and the bottom links.
+        # The window can also move them out to a column beside the main view (V).
+        self.slice_host = QWidget()
+        self.slice_layout = QVBoxLayout(self.slice_host)
+        self.slice_layout.setContentsMargins(0, 0, 0, 0)
+        self.slice_layout.setSpacing(6)
+        self.axial_pane = ViewPane("AXIAL", self.slice_host)
+        self.sagittal_pane = ViewPane("SAGITTAL", self.slice_host)
+        for p in (self.axial_pane, self.sagittal_pane):
+            p.setMinimumSize(110, 110)
+            p.hide()
+            self.slice_layout.addWidget(p, 1)
+        self.slice_host.hide()
+        v.addWidget(self.slice_host, 100)
         v.addStretch(1)
 
         bottom = QHBoxLayout()
@@ -407,6 +417,11 @@ class Rail(QFrame):
         bottom.addStretch(1)
         bottom.addWidget(self.help_btn)
         v.addLayout(bottom)
+
+    def dock_slices(self, panes):
+        """Put the slice panes (back) into the rail, in order."""
+        for p in panes:
+            self.slice_layout.addWidget(p, 1)
 
     def set_engineer(self, on):
         self.engineer_box.setVisible(on)
