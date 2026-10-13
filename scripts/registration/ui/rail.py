@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from .hud import HudPanel, StatePill, StatusPanel, PosePanel
+from .views import ViewPane
 
 RAIL_WIDTH = 300
 
@@ -307,6 +308,7 @@ HELP_ROWS = [
                           ("T", "all levels")]),
     ("View", [("Z", "zoom view on / off"),
               ("+ / -", "zoom in / out (or mouse wheel)"),
+              ("X", "axial view on / off"),
               ("V", "zoom layout: inset / side by side"),
               ("Y", "bone outline on / off"),
               ("E", "error circle on / off"),
@@ -370,7 +372,7 @@ class Rail(QFrame):
         v.addWidget(self.selector)
         self.card = TargetCard()                     # the selected pedicle and its expected error
         v.addWidget(self.card)
-        self.views_menu = ViewsMenu([("zoom", "Zoom   Z")])
+        self.views_menu = ViewsMenu([("zoom", "Zoom   Z"), ("axial", "Axial   X")])
         self.views_menu.toggled.connect(self.viewToggled.emit)
         v.addWidget(self.views_menu)
 
@@ -389,6 +391,11 @@ class Rail(QFrame):
         self.engineer_box.hide()
         v.addWidget(self.engineer_box)
 
+        # axial view: takes the free space between the views list and the bottom links
+        self.axial_pane = ViewPane("AXIAL")
+        self.axial_pane.setMinimumSize(110, 110)
+        self.axial_pane.hide()
+        v.addWidget(self.axial_pane, 100)
         v.addStretch(1)
 
         bottom = QHBoxLayout()

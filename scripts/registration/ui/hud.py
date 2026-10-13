@@ -9,7 +9,7 @@ StatePill, ShortcutsPanel, AxisTriad, TargetRadar to follow after
 we verify this renders correctly on your Mac.
 """
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QFrame, QLabel, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
@@ -473,7 +473,7 @@ class AxisTriadWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(120, 120)
+        self.setFixedSize(132, 132)
         self._axes_cam = None
 
     def set_rvec(self, rvec):
@@ -497,13 +497,13 @@ class AxisTriadWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         cx, cy = self.width() // 2, self.height() // 2
-        size = min(cx, cy) - 12
+        radius = min(cx, cy) - 3
+        size = int(radius * 0.58)          # axis length: leaves room inside the circle for the labels
 
         # Low-opacity dark circle backdrop (draws even when axes aren't set)
         backdrop = QColor(16, 20, 22, 130)
         painter.setBrush(QBrush(backdrop))
         painter.setPen(QPen(QColor(60, 195, 195, 90), 1))
-        radius = size + 8
         painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
 
         if self._axes_cam is None:
@@ -535,9 +535,12 @@ class AxisTriadWidget(QWidget):
             # Label
             painter.setPen(col)
             painter.setFont(QFont("Helvetica Neue", 11, QFont.Bold))
-            label_x = ex + (6 if ex >= cx else -18)
-            label_y = ey - 8
-            painter.drawText(label_x, label_y, name)
+            # label sits just beyond the tip, along the axis direction, so it never lies on a line
+            dx, dy = ex - cx, ey - cy
+            n = (dx * dx + dy * dy) ** 0.5
+            ux, uy = (dx / n, dy / n) if n > 4 else (0.0, -1.0)
+            lx, ly = ex + ux * 15, ey + uy * 15
+            painter.drawText(QRectF(lx - 10, ly - 10, 20, 20), Qt.AlignCenter, name)
 
 
 # ====================================================================

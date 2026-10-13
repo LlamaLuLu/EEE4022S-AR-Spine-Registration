@@ -26,7 +26,8 @@ class ViewPane(QLabel):
     def render_size(self):
         """Pixel size to render this view at: the pane's size on screen (sharp on HiDPI), capped."""
         dpr = self.devicePixelRatioF()
-        w, h = max(int(self.width() * dpr), 2), max(int(self.height() * dpr), 2)
+        cr = self.contentsRect()
+        w, h = max(int(cr.width() * dpr), 2), max(int(cr.height() * dpr), 2)
         k = min(1.0, MAX_RENDER_PX / max(w, h))
         return max(int(w * k), 2), max(int(h * k), 2)
 
@@ -40,7 +41,7 @@ class ViewPane(QLabel):
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         pix = QPixmap.fromImage(QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888))
         dpr = self.devicePixelRatioF()
-        pix = pix.scaled(self.size() * dpr, Qt.KeepAspectRatio, Qt.FastTransformation)
+        pix = pix.scaled(self.contentsRect().size() * dpr, Qt.KeepAspectRatio, Qt.FastTransformation)
         pix.setDevicePixelRatio(dpr)
         self.setPixmap(pix)
 
