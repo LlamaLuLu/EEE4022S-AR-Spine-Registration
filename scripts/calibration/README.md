@@ -1,4 +1,4 @@
-# Track 2 baseline pipeline (v0)
+# Camera calibration and capture
 
 Quick scaffolding to validate camera capture, ChArUco calibration, ArUco
 detection, and pose overlay end to end, using the S22 Ultra as a stand-in

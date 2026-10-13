@@ -51,7 +51,7 @@ from ar_board import (
 )
 from ar_tre import compute_tre_scalar, DEFAULT_FLE_MM
 from ar_targets import load_targets
-from ar_overlay import (
+from ui.overlay import (
     draw_targets, draw_trajectories, draw_wireframe,
     is_in_envelope,
 )
@@ -60,16 +60,16 @@ from ar_selection import Selection, parse_label, SIDE_NAMES
 from ar_guidance import trust_badge
 from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
                       draw_error_circle)
-from ar_stl import (
+from ui.stl import (
     load_stl_for_wireframe, load_vertebra_meshes,
     draw_vertebra_layers, _blend_lines,
 )
 from ar_theme import envelope_tier
 
 # Qt HUD
-from ar_qt_styles import QSS
-from ar_qt_hud import AxisTriadWidget
-from ar_qt_rail import Rail, HelpOverlay, RAIL_QSS
+from ui.styles import QSS
+from ui.hud import AxisTriadWidget
+from ui.rail import Rail, HelpOverlay, RAIL_QSS
 
 
 EXTENSION_MM = 70.0     # guide band length beyond the entry point

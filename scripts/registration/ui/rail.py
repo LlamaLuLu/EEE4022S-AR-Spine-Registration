@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
 )
 
-from ar_qt_hud import HudPanel, StatePill, StatusPanel, PosePanel
+from .hud import HudPanel, StatePill, StatusPanel, PosePanel
 
 RAIL_WIDTH = 300
 

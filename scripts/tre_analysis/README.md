@@ -1,4 +1,4 @@
-# TRE analysis pipeline
+# TRE simulation and marker layout analysis
 
 Simulation and prediction pipeline for evaluating fiducial marker board
 layouts before physical construction. Predicts Target Registration Error
