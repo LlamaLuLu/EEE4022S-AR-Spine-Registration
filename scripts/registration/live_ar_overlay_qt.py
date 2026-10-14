@@ -57,6 +57,7 @@ from ui.overlay import (
 )
 from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
 from ar_jitter import JitterMonitor
+from ar_check import entry_check
 from ar_scene import build_scene, error_summary, scene_to_json
 from ar_selection import Selection, parse_label, SIDE_NAMES
 from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
@@ -743,18 +744,11 @@ class ARWindow(QMainWindow):
         if r is None or r.state != "NAVIGATING" or r.rvec is None:
             self._say("Tracking is needed to check the overlay")
             return
-        R, _ = cv2.Rodrigues(np.asarray(r.rvec, float).reshape(3, 1))
-        t = np.asarray(r.tvec, float).reshape(3, 1)
         e = sel.entry_idx
         tgt = np.asarray(self.target_pts[e], float)
-        depth = float((R @ tgt.reshape(3, 1) + t)[2, 0])
-        n = cv2.undistortPoints(np.array([[cam_px]], np.float64), self.K, self.D).reshape(2)
-        Q = (R.T @ (np.array([[n[0] * depth], [n[1] * depth], [depth]]) - t)).ravel()
-        dv = Q - tgt
-        err = float(np.linalg.norm(dv))
-        proj, _ = cv2.projectPoints(tgt.reshape(1, 3), r.rvec, r.tvec, self.K, self.D)
-        tp = proj.reshape(2)
-        err_px = float(np.hypot(cam_px[0] - tp[0], cam_px[1] - tp[1]))
+        c = entry_check(cam_px, r.rvec, r.tvec, self.K, self.D, tgt)
+        Q, dv, err, depth = c["Q_mm"], c["dv_mm"], c["err_mm"], c["depth_mm"]
+        tp, err_px = c["target_px"], c["err_px"]
         r95 = float(error_radius95(np.asarray(r.tre_values), self.anchor)[e]) if r.tre_values is not None else float("nan")
         pred = float(r.tre_values[e]) if r.tre_values is not None else float("nan")
         self.check = {"sel": sel.current, "Q": Q, "err": err, "within": bool(err <= r95)}
