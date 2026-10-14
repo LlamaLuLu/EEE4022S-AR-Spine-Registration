@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
 )
 
-from .hud import HudPanel, StatePill, StatusPanel, PosePanel
+from .hud import HudPanel, StatePill, StatusPanel, PosePanel, JitterPanel
 from .views import ViewPane
 
 RAIL_WIDTH = 300
@@ -398,8 +398,10 @@ class Rail(QFrame):
         ev.addWidget(t)
         self.status_panel = StatusPanel(n_total=n_total, gate=gate)
         self.pose_panel = PosePanel()
+        self.jitter_panel = JitterPanel()
         ev.addWidget(self.status_panel)
         ev.addWidget(self.pose_panel)
+        ev.addWidget(self.jitter_panel)
         self.engineer_box.hide()
         v.addWidget(self.engineer_box)
 

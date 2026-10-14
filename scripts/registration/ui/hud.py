@@ -234,6 +234,35 @@ class PosePanel(HudPanel):
             self._last["zone"] = (z_str, e_status)
 
 
+class JitterPanel(HudPanel):
+    """Frame to frame wobble of the overlay at the selected entry point, in mm (see ar_jitter.py)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
+        row, self._jit_val = _row("Jitter", "--")
+        layout.addWidget(row)
+        row, self._depth_val = _row("Depth", "--")
+        layout.addWidget(row)
+        row, self._n_val = _row("Window", "--")
+        layout.addWidget(row)
+        self.setMinimumSize(240, 110)
+
+    def update_values(self, jitter):
+        """jitter: (total_mm, depth_mm, n_poses) or None."""
+        if jitter is None:
+            self._jit_val.setText("--")
+            self._depth_val.setText("--")
+            self._n_val.setText("--")
+            return
+        total, depth, n = jitter
+        self._jit_val.setText(f"{total:.2f} mm")
+        self._depth_val.setText(f"{depth:.2f} mm")
+        self._n_val.setText(f"{n} frames")
+
+
 # ====================================================================
 # TRE panel (bottom-left)
 # ====================================================================

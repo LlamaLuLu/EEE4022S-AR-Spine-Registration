@@ -56,6 +56,7 @@ from ui.overlay import (
     is_in_envelope,
 )
 from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
+from ar_jitter import JitterMonitor
 from ar_selection import Selection, parse_label, SIDE_NAMES
 from ar_guidance import trust_badge
 from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
@@ -455,6 +456,8 @@ class ARWindow(QMainWindow):
         self.check = None                      # last click-to-check result (see _do_check)
         self._toast = None                     # (text, until) shown in the hint bar
         self._zoom_xf = None                   # last zoom view's mapping back to camera pixels
+        self.jitter = JitterMonitor(n=15)             # rolling pose wobble in mm (debug card and CSV)
+        self._jitter_val = None                       # (total, depth, n) for this frame, or None
         self.engineer = False                         # M: diagnostics for the engineer, hidden by default
         self._fitted = False                          # window shaped to the camera frame once
 
@@ -478,7 +481,7 @@ class ARWindow(QMainWindow):
                 "cam_x", "cam_y", "cam_z", "in_envelope", "env_tier",
                 "amb_rejected", "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
                 "visible_ids",
-            ] + tre_headers)
+            ] + tre_headers + ["jitter_mm", "jitter_depth_mm", "jitter_n"])
             print(f"Logging to: {args.log}")
 
         # --- Screenshot ---
@@ -565,7 +568,7 @@ class ARWindow(QMainWindow):
         lay_ = self.debug_box.layout()
         lay_.setContentsMargins(14, 10, 14, 10)
         lay_.setSpacing(2)
-        for panel in (self.rail.status_panel, self.rail.pose_panel):
+        for panel in (self.rail.status_panel, self.rail.pose_panel, self.rail.jitter_panel):
             panel.setMinimumSize(0, 0)                    # the panels force a tall minimum height: drop it
             panel.layout().setContentsMargins(0, 2, 0, 2)
             panel.layout().setSpacing(0)
@@ -941,6 +944,7 @@ class ARWindow(QMainWindow):
 
         now = time.time()
         r = self.tracker.process(frame, now)          # tracking: no drawing
+        self._update_jitter(r)
 
         t2 = time.perf_counter()
 
@@ -1185,6 +1189,7 @@ class ARWindow(QMainWindow):
         if self.engineer:
             rail.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
             rail.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
+            rail.jitter_panel.update_values(self._jitter_val)
 
         if r.pnp_ok and r.state != "SEARCHING":
             self.axis_triad.set_rvec(r.rvec)
@@ -1208,6 +1213,26 @@ class ARWindow(QMainWindow):
         if not np.isfinite(r95[j]):
             return None, None, "muted"
         return j, float(r95[j]), grade(r95[j], r.env_tier)
+
+    def _update_jitter(self, r):
+        """Feed the rolling window; measure only when someone looks (debug card) or logs (CSV).
+        Selected pedicle: its entry point. All levels: the worst of the ten entry points."""
+        self.jitter.update(r)
+        self._jitter_val = None
+        if not (self.engineer or self._csv_writer is not None):
+            return
+        pts = self.target_pts[self.entry_idx] if self.selection.is_overview \
+            else self.target_pts[[self.selection.entry_idx]]
+        m = self.jitter.measure(pts)
+        if m is None:
+            return
+        total, depth, _ = m
+        j = int(np.argmax(total))
+        self._jitter_val = (float(total[j]), float(depth[j]), self.jitter.n_samples)
+
+    def _jitter_csv(self):
+        v = self._jitter_val
+        return ["", "", ""] if v is None else [f"{v[0]:.3f}", f"{v[1]:.3f}", v[2]]
 
     def _pose_dict(self, r):
         """Pose and status saved next to screenshots (None if there is no pose)."""
@@ -1248,7 +1273,7 @@ class ARWindow(QMainWindow):
             f"{dts[0]*1000:.1f}", f"{dts[1]*1000:.1f}",
             f"{dts[2]*1000:.1f}", f"{dts[3]*1000:.1f}",
             "|".join(str(i) for i in r.visible_ids),
-        ] + tre_vals)
+        ] + tre_vals + self._jitter_csv())
         self._csv_file.flush()
 
     def _fit_window_to_frame(self, fw, fh):
