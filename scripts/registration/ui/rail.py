@@ -248,12 +248,12 @@ class ViewsMenu(QWidget):
     """One toggle per extra view. Emits the view's name when clicked."""
     toggled = Signal(str)
 
-    def __init__(self, views, parent=None):
+    def __init__(self, views, parent=None, title="VIEWS"):
         super().__init__(parent)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(2)
-        t = QLabel("VIEWS")
+        t = QLabel(title)
         t.setObjectName("railTitle")
         v.addWidget(t)
         self.btns = {}
@@ -315,6 +315,8 @@ HELP_ROWS = [
               ("E", "error circle on / off"),
               ("F", "fullscreen"),
               ("P", "save a photo")]),
+    ("Check accuracy", [("Click", "on the real entry dot: error in mm"),
+                        ("Esc", "clear the mark")]),
     ("Registration", [("C", "confirm"),
                       ("R", "reject and re-check")]),
     ("Other", [("M", "debug mode"),
@@ -353,6 +355,7 @@ class HelpOverlay(QFrame):
 class Rail(QFrame):
     helpClicked = Signal()
     viewToggled = Signal(str)
+    optionToggled = Signal(str)
     engineerClicked = Signal()
 
     def __init__(self, n_total, gate, levels, parent=None):
@@ -373,9 +376,17 @@ class Rail(QFrame):
         v.addWidget(self.selector)
         self.card = TargetCard()                     # the selected pedicle and its expected error
         v.addWidget(self.card)
+        # two short columns: the extra views, and the display options (their keys stay the same)
         self.views_menu = ViewsMenu([("zoom", "Zoom   Z"), ("axial", "Axial   X"), ("sagittal", "Sagittal   L")])
         self.views_menu.toggled.connect(self.viewToggled.emit)
-        v.addWidget(self.views_menu)
+        self.options_menu = ViewsMenu([("outline", "Outline   Y"), ("circle", "Error circle   E"),
+                                       ("layout", "Side views   V")], title="OPTIONS")
+        self.options_menu.toggled.connect(self.optionToggled.emit)
+        menus = QHBoxLayout()
+        menus.setSpacing(10)
+        menus.addWidget(self.views_menu, 1)
+        menus.addWidget(self.options_menu, 1)
+        v.addLayout(menus)
 
         # engineer diagnostics, hidden until engineer mode is on
         self.engineer_box = QWidget()
@@ -429,6 +440,9 @@ class Rail(QFrame):
 
     def set_view(self, name, on):
         self.views_menu.set_active(name, on)
+
+    def set_option(self, name, on):
+        self.options_menu.set_active(name, on)
 
     def set_help(self, on):
         _set_prop(self.help_btn, "active", "true" if on else "false")

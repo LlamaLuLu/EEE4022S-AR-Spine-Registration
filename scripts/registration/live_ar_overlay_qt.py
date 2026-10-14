@@ -70,7 +70,7 @@ from ar_theme import envelope_tier
 from ui.styles import QSS
 from ui.hud import AxisTriadWidget
 from ui.rail import Rail, HelpOverlay, RAIL_QSS
-from ui.views import ViewPane, ZoomControls
+from ui.views import ViewPane, ZoomControls, ClickLabel, image_pos
 from ui.axial import SliceView, NEUTRAL
 from ui.zoom import project_point, zoom_frame
 
@@ -89,11 +89,14 @@ WINDOW_MIN_ASPECT = 1.6                          # window width / height: lower 
 AUTO_ZOOM = True                                  # open zoom on the first pedicle pick (Z or Reset close it)
 ZOOM_DEFAULT = 2                                 # index into FOV_STEPS when zoom is first opened (90 mm)
 ZOOM_LINE_PX = 2                                 # vertebra outline thickness in the zoom view
+ZOOM_ALL_PX = 1                                  # outline thickness of the all-levels zoom (1 or 2)
+ZOOM_ALL_ALPHA = 0.9                             # outline strength of the all-levels zoom (lower = lighter lines)
 ZOOM_TINT = 0.16                                 # faint fill of the selected vertebra in the zoom view
 BOX_FILL = 0.22                                  # faint teal fill inside the crop box on the camera view
 BOX_BGR = (195, 195, 60)                         # teal, the colour of the inset border
 ZOOM_STYLE = {k: {**v, "thickness": ZOOM_LINE_PX} for k, v in VERT_STYLE.items()}
 ZOOM_STYLE["selected"]["fill_alpha"] = ZOOM_TINT
+ZOOM_ALL_STYLE = {**VERT_STYLE, "verify": {**VERT_STYLE["verify"], "alpha": ZOOM_ALL_ALPHA, "thickness": ZOOM_ALL_PX}}   # all levels: 1 px, lighter
 OVERVIEW_EXT_MM = 50.0  # thin extension beyond the entry point in the all-levels view
 OUTER_COLOUR = (200, 150, 55)    # BGR blue, outer trajectory (beyond the entry point)
 INNER_COLOUR = (60, 215, 250)    # BGR yellow, inner trajectory (entry to isthmus)
@@ -449,6 +452,9 @@ class ARWindow(QMainWindow):
         self.views = {"zoom": False, "axial": True, "sagittal": True}   # axial and sagittal sit in the rail, on by default
         self._slice_cache = {}
         self._last_r = None
+        self.check = None                      # last click-to-check result (see _do_check)
+        self._toast = None                     # (text, until) shown in the hint bar
+        self._zoom_xf = None                   # last zoom view's mapping back to camera pixels
         self.engineer = False                         # M: diagnostics for the engineer, hidden by default
         self._fitted = False                          # window shaped to the camera frame once
 
@@ -513,6 +519,7 @@ class ARWindow(QMainWindow):
         self.rail.selector.overviewClicked.connect(lambda: self._select(self.selection.overview))
         self.rail.helpClicked.connect(self._toggle_help)
         self.rail.viewToggled.connect(self._toggle_view)
+        self.rail.optionToggled.connect(self._toggle_option)
         self.rail.engineerClicked.connect(self._toggle_engineer)
         lay.addWidget(self.rail)
 
@@ -523,11 +530,13 @@ class ARWindow(QMainWindow):
         self.stage.setAttribute(Qt.WA_StyledBackground, True)
         self.stage.setMinimumSize(640, 400)
         self.stage.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label = QLabel(self.stage)
+        self.video_label = ClickLabel(self.stage)
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet(MAIN_STYLE)
         self._main_style = MAIN_STYLE
         self.zoom_pane = ViewPane("ZOOM", self.stage)
+        self.video_label.clicked.connect(self._on_main_click)
+        self.zoom_pane.clicked.connect(self._on_zoom_click)
         self.zoom_pane.hide()
         self.slice_dock = "rail"                      # where the panes are right now (the default move happens after the build)
         self._main_w = 0
@@ -584,6 +593,8 @@ class ARWindow(QMainWindow):
         self.video_label.ensurePolished()
         if SLICE_DOCK_DEFAULT == "right":
             self._toggle_layout()
+        self.rail.set_option("outline", self.show_wire)
+        self.rail.set_option("circle", self.show_ellipses)
         self.rail.set_view("axial", self.views["axial"])
         self.rail.set_view("sagittal", self.views["sagittal"])
         self.resize(1360, 800)
@@ -660,7 +671,7 @@ class ARWindow(QMainWindow):
         if self.views["zoom"]:
             free_w = self.video_label.x() - 14
         self.hint_bar.adjustSize()
-        self.hint_bar.move(max((free_w - self.hint_bar.width()) // 2, 0), h - self.hint_bar.height() - pad)
+        self.hint_bar.move(max((free_w - self.hint_bar.width()) // 2, 14), h - self.hint_bar.height() - pad)
         self.help.adjustSize()
         self.help.move((w - self.help.width()) // 2, (h - self.help.height()) // 2)
         if self.engineer:
@@ -692,6 +703,102 @@ class ARWindow(QMainWindow):
         else:
             self.showFullScreen()
         QTimer.singleShot(900, lambda: self.timer.start(33))
+
+    # ---- click to check: where is the real entry dot compared with the overlay? ----
+
+    def _on_main_click(self, pos):
+        if self.views["zoom"]:                    # the camera inset is too small to click on
+            return
+        clean = self._last_clean_bgr
+        if clean is None:
+            return
+        hit = image_pos(self.video_label, pos, clean.shape[1], clean.shape[0])
+        if hit is not None:
+            self._do_check(hit, "camera")
+
+    def _on_zoom_click(self, pos):
+        if self._zoom_xf is None:
+            return
+        w, h, x0, y0, mag = self._zoom_xf
+        hit = image_pos(self.zoom_pane, pos, w, h)
+        if hit is not None:
+            self._do_check((x0 + hit[0] / mag, y0 + hit[1] / mag), "zoom")
+
+    def _say(self, text, secs=8.0):
+        self._toast = (text, time.time() + secs)
+
+    def _do_check(self, cam_px, view):
+        """The click marks the real entry dot. Back-project it onto the plane through the selected entry
+        target (square to the camera) and measure the in-plane error, as the ATP-2 tool does."""
+        r, sel = self._last_r, self.selection
+        if sel.is_overview:
+            self._say("Pick a pedicle first (W / S, A / D), then click its real entry dot")
+            return
+        if r is None or r.state != "NAVIGATING" or r.rvec is None:
+            self._say("Tracking is needed to check the overlay")
+            return
+        R, _ = cv2.Rodrigues(np.asarray(r.rvec, float).reshape(3, 1))
+        t = np.asarray(r.tvec, float).reshape(3, 1)
+        e = sel.entry_idx
+        tgt = np.asarray(self.target_pts[e], float)
+        depth = float((R @ tgt.reshape(3, 1) + t)[2, 0])
+        n = cv2.undistortPoints(np.array([[cam_px]], np.float64), self.K, self.D).reshape(2)
+        Q = (R.T @ (np.array([[n[0] * depth], [n[1] * depth], [depth]]) - t)).ravel()
+        dv = Q - tgt
+        err = float(np.linalg.norm(dv))
+        proj, _ = cv2.projectPoints(tgt.reshape(1, 3), r.rvec, r.tvec, self.K, self.D)
+        tp = proj.reshape(2)
+        err_px = float(np.hypot(cam_px[0] - tp[0], cam_px[1] - tp[1]))
+        r95 = float(error_radius95(np.asarray(r.tre_values), self.anchor)[e]) if r.tre_values is not None else float("nan")
+        pred = float(r.tre_values[e]) if r.tre_values is not None else float("nan")
+        self.check = {"sel": sel.current, "Q": Q, "err": err, "within": bool(err <= r95)}
+        self._say(f"{sel.name.upper()}   {err:.1f} mm off   expected within {r95:.1f}   Esc clears")
+        print(f"Check {sel.name}: {err:.2f} mm (dx {dv[0]:+.2f}, dy {dv[1]:+.2f}, dz {dv[2]:+.2f}), "
+              f"expected within {r95:.2f} mm")
+        self._redraw_cached()                     # show the mark now, and in the saved window picture
+        shot = self._save_screenshot(quiet=True)  # clean frame + pose, so the offline tool can repeat it
+        self._log_check({
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"), "shot": shot or "",
+            "label": self.target_labels[e], "level": f"L{sel.level}", "side": sel.side, "view": view,
+            "distance_mm": round(float(r.distance_mm), 1), "elev_deg": round(float(r.elev_deg), 1),
+            "az_deg": round(float(r.az_deg), 1), "n_markers": int(r.n_markers),
+            "tier": r.env_tier, "rms_px": None if np.isnan(r.reproj_rms) else round(float(r.reproj_rms), 2),
+            "target_u": round(float(tp[0]), 2), "target_v": round(float(tp[1]), 2),
+            "dot_u": round(float(cam_px[0]), 2), "dot_v": round(float(cam_px[1]), 2),
+            "err_px": round(err_px, 2), "depth_mm": round(depth, 1), "err_mm": round(err, 3),
+            "dx_mm": round(float(dv[0]), 3), "dy_mm": round(float(dv[1]), 3), "dz_mm": round(float(dv[2]), 3),
+            "pred_tre_mm": round(pred, 3), "expected_95_mm": round(r95, 3),
+        })
+
+    def _log_check(self, row):
+        import csv
+        path = self._screenshot_dir / "click_checks.csv"
+        new = not path.exists()
+        with open(path, "a", newline="") as fh:
+            wr = csv.DictWriter(fh, fieldnames=list(row.keys()))
+            if new:
+                wr.writeheader()
+            wr.writerow(row)
+
+    def _draw_check(self, frame, rvec, tvec, K, D, target_mm):
+        """The clicked point (pinned to the phantom) with a line to the overlay's entry point and the error."""
+        pts = np.vstack([self.check["Q"], np.asarray(target_mm, float)]).astype(np.float64)
+        proj, _ = cv2.projectPoints(pts, rvec, tvec, K, D)
+        (qx, qy), (tx, ty) = proj.reshape(2, 2)
+        fw = frame.shape[1]
+        colour = (140, 210, 100) if self.check["within"] else (90, 90, 215)       # BGR green / red
+        arm = max(7, fw // 150)
+        q, tg = (int(round(qx)), int(round(qy))), (int(round(tx)), int(round(ty)))
+        cv2.line(frame, tg, q, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(frame, tg, q, (255, 255, 255), 1, cv2.LINE_AA)
+        for col, th in (((0, 0, 0), 4), (colour, 2)):
+            cv2.line(frame, (q[0] - arm, q[1] - arm), (q[0] + arm, q[1] + arm), col, th, cv2.LINE_AA)
+            cv2.line(frame, (q[0] - arm, q[1] + arm), (q[0] + arm, q[1] - arm), col, th, cv2.LINE_AA)
+        txt = f"{self.check['err']:.1f} mm"
+        fs = min(max(fw / 2200.0, 0.45), 1.0)
+        org = (q[0] + arm + 6, q[1] - arm - 4)
+        cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, fs, colour, 2, cv2.LINE_AA)
 
     def _redraw_cached(self):
         """After a layout change, redraw the views from the last camera frame right away, instead of
@@ -738,6 +845,19 @@ class ARWindow(QMainWindow):
         else:
             super().wheelEvent(event)
 
+    def _toggle_option(self, name):
+        """Y outline, E error circle, V side views: the keys and the rail buttons both come here."""
+        if name == "outline":
+            self.show_wire = not self.show_wire
+            self.rail.set_option("outline", self.show_wire)
+        elif name == "circle":
+            self.show_ellipses = not self.show_ellipses
+            self.rail.set_option("circle", self.show_ellipses)
+        elif name == "layout":
+            self._toggle_layout()
+            return
+        self._redraw_cached()
+
     def _toggle_layout(self):
         """V: move the axial and sagittal views between the rail and a column beside the main view."""
         panes = [self.axial_pane, self.sagittal_pane]
@@ -749,6 +869,7 @@ class ARWindow(QMainWindow):
         else:
             self.slice_dock = "rail"
             self.rail.dock_slices(panes)
+        self.rail.set_option("layout", self.slice_dock == "right")
         self._layout_views()
         self._redraw_cached()
 
@@ -762,20 +883,39 @@ class ARWindow(QMainWindow):
         p = parse_label(self.target_labels[j])
         return f"L{p[0]} {SIDE_NAMES[p[1]]}" if p else str(self.target_labels[j])
 
+    def _hint_free_width(self):
+        """Width the hint bar may use: the main view, minus the camera inset in zoom mode, minus margins."""
+        mw = self._main_w or self.stage.width()
+        free = (self.video_label.x() - 14) if self.views["zoom"] else mw
+        return max(free - 28, 120)
+
     def _update_hint(self, r):
-        """One line at the bottom of the video: what the keys do right now."""
-        if r.state != "NAVIGATING":
-            txt = {"VERIFYING": "C  confirm      R  reject",
-                   "STALE": "Bring the markers back into view"}.get(r.state, "")
+        """One line at the bottom of the video: what the keys do right now. Longer wording is
+        swapped for shorter wording when the bar would not fit beside the camera inset."""
+        name = self.selection.name.upper()
+        if self._toast is not None and time.time() < self._toast[1]:
+            options = [self._toast[0], self._toast[0].replace("   Esc clears", "")]
+        elif r.state != "NAVIGATING":
+            options = [{"VERIFYING": "C  confirm      R  reject",
+                        "STALE": "Bring the markers back into view"}.get(r.state, "")]
         elif self.selection.is_overview:
-            txt = "ALL LEVELS      W/S or A/D  pick a pedicle"
+            options = ["ALL LEVELS      W/S or A/D  pick a pedicle", "ALL LEVELS   W/S  A/D  pick", "ALL LEVELS"]
         else:
-            txt = f"{self.selection.name.upper()}      W/S  level      A/D  side      T  all levels"
-        if not txt:
+            options = [f"{name}      W/S  level      A/D  side      T  all levels",
+                       f"{name}    W/S  level    A/D  side",
+                       f"{name}    W/S  A/D", name]
+        if not options[0]:
             self.hint_bar.hide()
             return
-        if self.hint_bar.text() != txt:
-            self.hint_bar.setText(txt)
+        avail = self._hint_free_width()
+        key = (tuple(options), avail)
+        if key != getattr(self, "_hint_key", None):
+            self._hint_key = key
+            for txt in options:                       # first wording that fits
+                self.hint_bar.setText(txt)
+                self.hint_bar.adjustSize()
+                if self.hint_bar.width() <= avail:
+                    break
             self._place_overlays()
         self.hint_bar.show()
         self.hint_bar.raise_()
@@ -862,8 +1002,9 @@ class ARWindow(QMainWindow):
             # if no focus is set).
             sel = self.focus_level if state == "NAVIGATING" else None
             if zoom:                                     # thicker line, exact faint fill
-                draw_vertebra_layers(frame, self.vertebrae, rvec, tvec, K, D,
-                                     selected=sel, style=ZOOM_STYLE, exact_fill=sel is not None)
+                draw_vertebra_layers(frame, self.vertebrae, rvec, tvec, K, D, selected=sel,
+                                     style=ZOOM_STYLE if sel is not None else ZOOM_ALL_STYLE,
+                                     exact_fill=sel is not None)
             else:
                 draw_vertebra_layers(frame, self.vertebrae,
                                      rvec, tvec, K, D, selected=sel)
@@ -924,6 +1065,8 @@ class ARWindow(QMainWindow):
                 e = sel_.entry_idx
                 draw_error_circle(frame, self.target_pts[e], r95[e],
                                   rvec, tvec, K, D, colour[e])
+            if focus and self.check is not None and self.check["sel"] == sel_.current:
+                self._draw_check(frame, rvec, tvec, K, D, self.target_pts[sel_.entry_idx])
 
     def _render_zoom(self, clean, r, frame):
         """Zoom view: crop the clean camera frame around the selected entry point, magnify it,
@@ -931,6 +1074,7 @@ class ARWindow(QMainWindow):
         pane = self.zoom_pane
         sel = self.selection
         can_in, can_out = self.zoom_idx < len(FOV_STEPS) - 1, self.zoom_idx > 0
+        self._zoom_xf = None
         self.zoom_ctl.set_state(None, can_in, can_out)
         if r.state != "NAVIGATING" or r.rvec is None:
             pane.set_tag("ZOOM")
@@ -964,6 +1108,7 @@ class ARWindow(QMainWindow):
         self._draw_scene(img, r, Kz, self.D, zoom=True)
         pane.set_tag(f"ZOOM  {name}  {fov:.0f} mm")
         pane.show_frame(img)
+        self._zoom_xf = (w, h, e[0] - w / (2.0 * mag), e[1] - h / (2.0 * mag), mag)
         self.zoom_ctl.set_state(mag, can_in, can_out)
         # box on the camera view around the area the zoom is showing
         fh = frame.shape[0]
@@ -1030,8 +1175,12 @@ class ARWindow(QMainWindow):
             rail.card.update_state("All levels", r95_mm, status,
                                    f"Worst entry point: {self._friendly(j)}. 95% of the time within this.")
         else:
+            if self.check is not None and self.check["sel"] == self.selection.current:
+                extra = f"Last check: {self.check['err']:.1f} mm off the real dot. Click it again to redo."
+            else:
+                extra = "Click the real entry dot to check the overlay."
             rail.card.update_state(self.selection.name, r95_mm, status,
-                                   "Expected error at the entry point. 95% of the time within this.")
+                                   f"Expected error at the entry point. 95% of the time within this. {extra}")
 
         if self.engineer:
             rail.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
@@ -1154,6 +1303,10 @@ class ARWindow(QMainWindow):
         elif k == Qt.Key_Escape:
             if self.help.isVisible():
                 self._toggle_help()
+            elif self.check is not None:
+                self.check = None
+                self._toast = None
+                self._redraw_cached()
         elif text in ("h", "?"):
             self._toggle_help()
         elif k == Qt.Key_P and shift:
@@ -1180,9 +1333,9 @@ class ARWindow(QMainWindow):
             self._select(sel.overview)
         # ---- view and tools ----
         elif text == "y":
-            self.show_wire = not self.show_wire
+            self._toggle_option("outline")
         elif text == "e":
-            self.show_ellipses = not self.show_ellipses
+            self._toggle_option("circle")
         elif text == "z":
             self._toggle_view("zoom")
         elif text == "x":
@@ -1217,13 +1370,14 @@ class ARWindow(QMainWindow):
         was_overview = self.selection.is_overview
         if change(*args):
             print("Selected:", self.selection.name)
+            self.check = None
             if AUTO_ZOOM and was_overview and not self.selection.is_overview and not self.views["zoom"]:
                 self._toggle_view("zoom")                 # first pedicle pick opens the zoom view (only Z / Reset close it)
 
-    def _save_screenshot(self):
-        """Save raw frame (with on-frame overlays) and full window (with HUD)."""
+    def _save_screenshot(self, quiet=False):
+        """Save raw frame (with on-frame overlays) and full window (with HUD). Returns the file stem."""
         if self._last_frame_bgr is None:
-            return
+            return None
         self._screenshot_count += 1
         stamp = time.strftime("%Y%m%d_%H%M%S")
         base = self._screenshot_dir / f"shot_{stamp}_{self._screenshot_count:03d}"
@@ -1246,11 +1400,13 @@ class ARWindow(QMainWindow):
         else:
             print("  (no valid pose, measurement data not saved)")
         self.grab().save(f"{base}_window.png")
-        print(f"Screenshot saved: {base}_*.png")
+        if not quiet:
+            print(f"Screenshot saved: {base}_*.png")
         if self._csv_writer is not None:
             self._csv_writer.writerow([f"{time.time():.3f}", self._step,
                                        "SCREENSHOT", base.name])
             self._csv_file.flush()
+        return base.name
 
     def closeEvent(self, event):
         self.timer.stop()

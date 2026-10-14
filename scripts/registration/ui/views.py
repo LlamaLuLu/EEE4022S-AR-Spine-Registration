@@ -4,14 +4,43 @@ extra view (zoom now, axial later) is a ViewPane in the column on its right.
 A pane only shows what it is given: a BGR image or a short message.
 """
 import cv2
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QPoint
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy
 
 MAX_RENDER_PX = 1100        # cap on the longest side a view is rendered at
 
 
+def image_pos(label, pos, iw, ih):
+    """Where a click at `pos` (label coordinates) lands in an image of iw x ih pixels that the label
+    shows scaled to fit and centred. Returns (u, v) in image pixels, or None outside the picture."""
+    cr = label.contentsRect()
+    k = min(cr.width() / iw, cr.height() / ih)
+    dw, dh = iw * k, ih * k
+    ox = cr.x() + (cr.width() - dw) / 2.0
+    oy = cr.y() + (cr.height() - dh) / 2.0
+    u, v = (pos.x() - ox) / k, (pos.y() - oy) / k
+    return (u, v) if (0 <= u < iw and 0 <= v < ih) else None
+
+
+class ClickLabel(QLabel):
+    """A QLabel that reports left clicks."""
+    clicked = Signal(QPoint)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit(e.position().toPoint())
+        super().mousePressEvent(e)
+
+
 class ViewPane(QLabel):
+    clicked = Signal(QPoint)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit(e.position().toPoint())
+        super().mousePressEvent(e)
+
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setObjectName("viewPane")
