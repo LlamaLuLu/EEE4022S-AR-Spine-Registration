@@ -57,8 +57,8 @@ from ui.overlay import (
 )
 from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
 from ar_jitter import JitterMonitor
+from ar_scene import build_scene, error_summary, scene_to_json
 from ar_selection import Selection, parse_label, SIDE_NAMES
-from ar_guidance import trust_badge
 from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
                       draw_error_circle)
 from ui.stl import (
@@ -458,6 +458,8 @@ class ARWindow(QMainWindow):
         self._zoom_xf = None                   # last zoom view's mapping back to camera pixels
         self.jitter = JitterMonitor(n=15)             # rolling pose wobble in mm (debug card and CSV)
         self._jitter_val = None                       # (total, depth, n) for this frame, or None
+        self.scene = None                             # this frame as plain data (ar_scene.py)
+        self._scene_file = open(args.scene_log, "w") if args.scene_log else None
         self.engineer = False                         # M: diagnostics for the engineer, hidden by default
         self._fitted = False                          # window shaped to the camera frame once
 
@@ -568,7 +570,8 @@ class ARWindow(QMainWindow):
         lay_ = self.debug_box.layout()
         lay_.setContentsMargins(14, 10, 14, 10)
         lay_.setSpacing(2)
-        for panel in (self.rail.status_panel, self.rail.pose_panel, self.rail.jitter_panel):
+        for panel in (self.rail.status_panel, self.rail.pose_panel, self.rail.error_panel,
+                      self.rail.jitter_panel):
             panel.setMinimumSize(0, 0)                    # the panels force a tall minimum height: drop it
             panel.layout().setContentsMargins(0, 2, 0, 2)
             panel.layout().setSpacing(0)
@@ -983,6 +986,8 @@ class ARWindow(QMainWindow):
             self._last_log = t4
 
         self._log_row(r, (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+        if self._scene_file is not None:
+            self._scene_file.write(scene_to_json(self.scene) + "\n")
 
     # ---- rendering: draws the FrameResult onto the numpy frame ----
 
@@ -1168,7 +1173,10 @@ class ARWindow(QMainWindow):
     def _update_widgets(self, r):
         rail = self.rail
         rail.state_pill.set_state(r.state, r.verify_remaining)
-        rail.trust.update_state(*trust_badge(r, self.is_v3, self.n_total))
+        self.scene = sc = build_scene(r, self.selection, self.target_pts, self.target_labels,
+                                      self.anchor, self.is_v3, self.n_total, self._jitter_val)
+        t = sc["trust"]
+        rail.trust.update_state(t["status"], t["title"], t["reason"])
         rail.selector.set_state(self.selection.level, self.selection.side)
 
         j, r95_mm, status = self._error_summary(r)
@@ -1189,6 +1197,11 @@ class ARWindow(QMainWindow):
         if self.engineer:
             rail.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
             rail.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
+            err = sc["error"]
+            if err is None:
+                rail.error_panel.update_values(None, None, None)
+            else:
+                rail.error_panel.update_values(err["label"], sc["targets"][err["target"]]["tre_mm"], err["r95_mm"])
             rail.jitter_panel.update_values(self._jitter_val)
 
         if r.pnp_ok and r.state != "SEARCHING":
@@ -1203,23 +1216,14 @@ class ARWindow(QMainWindow):
     def _error_summary(self, r):
         """(target index, 95 % error mm, status). One pedicle selected: its entry point.
         Overview: the worst entry point. Index is None when there is nothing to show."""
-        if r.tre_values is None or r.state == "SEARCHING":
-            return None, None, "muted"
-        r95 = error_radius95(np.asarray(r.tre_values), self.anchor)
-        if self.selection.is_overview:
-            j = int(self.entry_idx[np.argmax(r95[self.entry_idx])])
-        else:
-            j = self.selection.entry_idx
-        if not np.isfinite(r95[j]):
-            return None, None, "muted"
-        return j, float(r95[j]), grade(r95[j], r.env_tier)
+        return error_summary(r, self.selection, self.anchor)
 
     def _update_jitter(self, r):
         """Feed the rolling window; measure only when someone looks (debug card) or logs (CSV).
         Selected pedicle: its entry point. All levels: the worst of the ten entry points."""
         self.jitter.update(r)
         self._jitter_val = None
-        if not (self.engineer or self._csv_writer is not None):
+        if not (self.engineer or self._csv_writer is not None or self._scene_file is not None):
             return
         pts = self.target_pts[self.entry_idx] if self.selection.is_overview \
             else self.target_pts[[self.selection.entry_idx]]
@@ -1424,6 +1428,9 @@ class ARWindow(QMainWindow):
                 json.dump(pose, f, indent=2)
         else:
             print("  (no valid pose, measurement data not saved)")
+        if self.scene is not None:
+            with open(f"{base}_scene.json", "w") as f:
+                f.write(scene_to_json(self.scene, indent=1))
         self.grab().save(f"{base}_window.png")
         if not quiet:
             print(f"Screenshot saved: {base}_*.png")
@@ -1436,6 +1443,8 @@ class ARWindow(QMainWindow):
     def closeEvent(self, event):
         self.timer.stop()
         self.grabber.release()
+        if self._scene_file is not None:
+            self._scene_file.close()
         if self._csv_file is not None:
             self._csv_file.close()
             print(f"Log closed: {self.args.log}")
@@ -1474,6 +1483,8 @@ def main():
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])
     ap.add_argument("--log", default=None,
                     help="CSV file path for per-frame data logging (ATP tests)")
+    ap.add_argument("--scene-log", default=None,
+                    help="JSON lines file: one scene (ar_scene.py) per frame, for the phone build and replay tests")
     ap.add_argument("--screenshot-dir", default="data/screenshots",
                     help="Directory for screenshots (press 's' to capture)")
     args = ap.parse_args()

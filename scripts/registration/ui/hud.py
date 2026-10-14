@@ -234,6 +234,33 @@ class PosePanel(HudPanel):
             self._last["zone"] = (z_str, e_status)
 
 
+class ErrorPanel(HudPanel):
+    """Predicted TRE and the calibrated 95 % error at the shown entry point (selected, or worst in overview)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
+        row, self._target_val = _row("Target", "--")
+        layout.addWidget(row)
+        row, self._tre_val = _row("Pred. TRE", "--")
+        layout.addWidget(row)
+        row, self._r95_val = _row("Expected 95%", "--")
+        layout.addWidget(row)
+        self.setMinimumSize(240, 110)
+
+    def update_values(self, label, tre_mm, r95_mm):
+        if label is None:
+            self._target_val.setText("--")
+            self._tre_val.setText("--")
+            self._r95_val.setText("--")
+            return
+        self._target_val.setText(str(label))
+        self._tre_val.setText("--" if tre_mm is None else f"{tre_mm:.2f} mm")
+        self._r95_val.setText("--" if r95_mm is None else f"{r95_mm:.1f} mm")
+
+
 class JitterPanel(HudPanel):
     """Frame to frame wobble of the overlay at the selected entry point, in mm (see ar_jitter.py)."""
 
