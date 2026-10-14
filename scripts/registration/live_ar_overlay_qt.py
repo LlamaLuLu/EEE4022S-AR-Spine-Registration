@@ -17,9 +17,12 @@ Usage (from repo root):
         --marker-map data/bracket_markers/marker_map.json \
         --stl phantom/meshes/v1_print/BASE_v1.4.stl
 
-UI v2 (per-vertebra focus) is the default: the per-vertebra meshes in
-phantom/meshes/v3_overlay are loaded automatically. Keys: 1-5 focus one level,
-A (or 0) shows all levels, Left/Right arrows (or [ and ]) step through levels.
+UI v2 (pedicle selection) is the default: the per-vertebra meshes in
+phantom/meshes/v3_overlay are loaded automatically. Select one pedicle at a
+time. Keys: W/S or Up/Down step the vertebra, A/D or Left/Right pick the side,
+1-5 jump to a level, [ and ] walk the ten pedicles in order, T (or 0) shows all
+levels, Y wireframe, E error circle, Z zoom view (+ / - or the wheel change the zoom), X axial view, L sagittal (lateral) view, V move those two beside the main view or back to the rail, F fullscreen, P photo, M debug mode (ArUco
+boxes, marker count, pose, Shift+P residuals), H or ? help.
 If those meshes are missing or fail to load, the original single-mesh
 wireframe (--stl) is used instead. Pass --vertebrae-dir none to force it.
 """
@@ -31,13 +34,14 @@ import threading
 from pathlib import Path
 
 import cv2
+from replay_source import ReplayCapture, is_replay_source
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, QEvent
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QWidget, QStackedLayout,
-    QVBoxLayout, QHBoxLayout,
+    QVBoxLayout, QHBoxLayout, QSizePolicy,
 )
 
 # ArUco + TRE pipeline (unchanged from cv2 version)
@@ -47,28 +51,54 @@ from ar_board import (
 )
 from ar_tre import compute_tre_scalar, DEFAULT_FLE_MM
 from ar_targets import load_targets
-from ar_overlay import (
+from ui.overlay import (
     draw_targets, draw_trajectories, draw_wireframe,
     is_in_envelope,
 )
-from ar_stl import (
-    load_stl_for_wireframe, load_vertebra_meshes, level_from_label,
-    draw_vertebra_layers, _blend_lines,
+from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
+from ar_jitter import JitterMonitor
+from ar_check import entry_check
+from ar_scene import build_scene, error_summary, scene_to_json
+from ar_selection import Selection, parse_label, SIDE_NAMES
+from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
+                      draw_error_circle)
+from ui.stl import (
+    load_stl_for_wireframe, load_vertebra_meshes,
+    draw_vertebra_layers, _blend_lines, STYLE as VERT_STYLE,
 )
-from ar_theme import envelope_tier, tre_colour
+from ar_theme import envelope_tier
 
 # Qt HUD
-from ar_qt_styles import QSS
-from ar_qt_hud import (
-    StatusPanel, PosePanel, TrePanel, StatePill,
-    ShortcutsPanel, AxisTriadWidget, TargetRadarWidget,
-)
+from ui.styles import QSS
+from ui.hud import AxisTriadWidget
+from ui.rail import Rail, HelpOverlay, RAIL_QSS
+from ui.views import ViewPane, ZoomControls, ClickLabel, image_pos
+from ui.axial import SliceView, NEUTRAL
+from ui.zoom import project_point, zoom_frame
 
 
 EXTENSION_MM = 70.0     # guide band length beyond the entry point
 TICK_MM = 5.0           # a tick mark every 5 mm
 LABEL_MM = 10.0         # longer tick every 10 mm; numbers every 10 mm when they fit
 BAND_ALPHA = 0.70       # opacity of the outer (approach) guide band
+MAIN_STYLE = "background-color: black;"
+INSET_STYLE = "background-color: black; border: 2px solid #3CC3C3;"
+INSET_FRAC = 0.30        # zoom layout 'inset': camera picture-in-picture width, as a share of the video area
+SLICE_COL_FRAC = 0.27    # width of the axial / sagittal column beside the main view, as a share of the stage
+SLICE_DOCK_DEFAULT = "right"  # where axial and sagittal start: "right" (beside the main view) or "rail" (V swaps)
+FOV_STEPS = (150.0, 120.0, 90.0, 60.0, 40.0)   # zoom steps: width of the field of view in mm (wide to tight)
+WINDOW_MIN_ASPECT = 1.6                          # window width / height: lower = taller default window
+AUTO_ZOOM = True                                  # open zoom on the first pedicle pick (Z or Reset close it)
+ZOOM_DEFAULT = 2                                 # index into FOV_STEPS when zoom is first opened (90 mm)
+ZOOM_LINE_PX = 2                                 # vertebra outline thickness in the zoom view
+ZOOM_ALL_PX = 1                                  # outline thickness of the all-levels zoom (1 or 2)
+ZOOM_ALL_ALPHA = 0.9                             # outline strength of the all-levels zoom (lower = lighter lines)
+ZOOM_TINT = 0.16                                 # faint fill of the selected vertebra in the zoom view
+BOX_FILL = 0.22                                  # faint teal fill inside the crop box on the camera view
+BOX_BGR = (195, 195, 60)                         # teal, the colour of the inset border
+ZOOM_STYLE = {k: {**v, "thickness": ZOOM_LINE_PX} for k, v in VERT_STYLE.items()}
+ZOOM_STYLE["selected"]["fill_alpha"] = ZOOM_TINT
+ZOOM_ALL_STYLE = {**VERT_STYLE, "verify": {**VERT_STYLE["verify"], "alpha": ZOOM_ALL_ALPHA, "thickness": ZOOM_ALL_PX}}   # all levels: 1 px, lighter
 OVERVIEW_EXT_MM = 50.0  # thin extension beyond the entry point in the all-levels view
 OUTER_COLOUR = (200, 150, 55)    # BGR blue, outer trajectory (beyond the entry point)
 INNER_COLOUR = (60, 215, 250)    # BGR yellow, inner trajectory (entry to isthmus)
@@ -83,14 +113,13 @@ DEFAULT_VERTEBRAE_DIR = _REPO / "phantom" / "meshes" / "v3_overlay"
 DEFAULT_FALLBACK_STL = _REPO / "phantom" / "meshes" / "v2_print" / "spine_phantom_v2.stl"
 DEFAULT_ISTHMUS = _REPO / "annotations" / "pedicle_isthmus_targets.json"
 DEFAULT_ENTRY = _REPO / "annotations" / "pedicle_entry_targets.json"
-STALE_HOLD_SEC = 0.3
-VERIFY_COUNTDOWN_SEC = 2.0
-DETACH_OFFSET_PX = 60
 ROTATE_MAP = {0: None, 90: cv2.ROTATE_90_CLOCKWISE,
               180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 
 
 def open_source(source):
+    if is_replay_source(source):
+        return ReplayCapture(source)
     try:
         return cv2.VideoCapture(int(source))
     except ValueError:
@@ -124,7 +153,7 @@ def _blend_text(frame, txt, centre, angle_deg, colour, alpha, scale):
 
 
 def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
-                          doff=0, ext_mm=EXTENSION_MM, status_colour=None):
+                          ext_mm=EXTENSION_MM, status_colour=None):
     """
     Focus-mode trajectory for one pedicle, in the style of the 7D FLASH tool view:
       * beyond the entry point: a thick translucent blue guide band (the approach path)
@@ -152,9 +181,7 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
     def proj(pts):
         p, _ = cv2.projectPoints(np.asarray(pts, np.float64).reshape(-1, 1, 3),
                                  rvec, tvec, K, D)
-        p = p.reshape(-1, 2)
-        p[:, 1] -= doff
-        return p
+        return p.reshape(-1, 2)
 
     # ---- guide band beyond the entry, thin line inside the bone ----
     p_e = proj([entry, entry + axis * ext_mm, isth])
@@ -222,7 +249,7 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
 
 
 def draw_overview_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
-                             doff=0, ext_mm=OVERVIEW_EXT_MM, status_colour=None):
+                             ext_mm=OVERVIEW_EXT_MM, status_colour=None):
     """
     All-levels view: thin line from the isthmus through the entry point and on
     for ext_mm beyond it, so the approach direction is visible without the
@@ -241,7 +268,6 @@ def draw_overview_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
     p, _ = cv2.projectPoints(np.array([isth, entry, entry + axis * ext_mm], np.float64)
                              .reshape(-1, 1, 3), rvec, tvec, K, D)
     p = np.round(p.reshape(-1, 2)).astype(np.int32)
-    p[:, 1] -= int(doff)
     inner = p[[0, 1]].reshape(1, 2, 2)
     outer = p[[1, 2]].reshape(1, 2, 2)
     _blend_lines(frame, inner, (0, 0, 0), 0.45, w + 2)           # dark underlay for contrast
@@ -314,26 +340,14 @@ class ARWindow(QMainWindow):
         print(f"Targets: {len(self.target_pts)}, "
               f"trajectory pairs: {len(self.traj_pairs)}")
 
-        # Per-level index (for focus mode): level -> target indices, and
-        # (isthmus, entry) pairs remapped into each level's sub-array.
-        self.level_idx = {}
-        for i, lbl in enumerate(self.target_labels):
-            lv, _side = level_from_label(lbl)
-            if lv is not None:
-                self.level_idx.setdefault(lv, []).append(i)
-        self.level_idx = {lv: np.array(ix, dtype=int)
-                          for lv, ix in self.level_idx.items()}
-        self.entry_idx = np.array([i for i, l in enumerate(self.target_labels)
-                                   if "_E_" in l], dtype=int)
-        self.level_pairs = {}
-        for lv, ix in self.level_idx.items():
-            pos = {g: k for k, g in enumerate(ix)}
-            self.level_pairs[lv] = [(pos[a], pos[b]) for a, b in self.traj_pairs
-                                    if a in pos and b in pos]
+        # Which pedicle is selected (single source of truth for keys, rail, clicks)
+        self.selection = Selection(self.target_labels)
+        self.entry_idx = np.array(self.selection.all_entry_idx, dtype=int)
+        # Validated error anchor for this board (see ar_error.py)
+        self.anchor = ANCHORS["bracket" if self.is_v3 else "dome"]
 
         # --- Per-vertebra meshes (UI v2) ---
         self.vertebrae = None
-        self.focus_level = None          # None = show all levels
         vdir = args.vertebrae_dir
         if str(vdir).lower() not in ("none", "off", ""):
             try:
@@ -431,13 +445,24 @@ class ARWindow(QMainWindow):
             ARUCO_DICT, cv2.aruco.DetectorParameters()
         )
 
-        # --- State ---
-        self.state = "SEARCHING"
-        self.prev_rvec = self.prev_tvec = None
-        self.last_good_time = self.verify_start_time = 0.0
-        self._pre_stale_state = None   # state to resume after a brief dropout
-        self.show_traj = self.show_ellipses = self.show_wire = True
-        self.detach = False
+        # --- Tracking (detection, PnP, state machine, TRE) ---
+        self.tracker = Tracker(self.detector, self.corner_lut, self.K, self.D,
+                               self.target_pts, args.fle, self.is_v3)
+        self.show_ellipses = self.show_wire = True
+        self.zoom_idx = ZOOM_DEFAULT
+        self._wheel_acc = 0
+        self.views = {"zoom": False, "axial": True, "sagittal": True}   # axial and sagittal sit in the rail, on by default
+        self._slice_cache = {}
+        self._last_r = None
+        self.check = None                      # last click-to-check result (see _do_check)
+        self._toast = None                     # (text, until) shown in the hint bar
+        self._zoom_xf = None                   # last zoom view's mapping back to camera pixels
+        self.jitter = JitterMonitor(n=15)             # rolling pose wobble in mm (debug card and CSV)
+        self._jitter_val = None                       # (total, depth, n) for this frame, or None
+        self.scene = None                             # this frame as plain data (ar_scene.py)
+        self._scene_file = open(args.scene_log, "w") if args.scene_log else None
+        self.engineer = False                         # M: diagnostics for the engineer, hidden by default
+        self._fitted = False                          # window shaped to the camera frame once
 
         # --- Timing instrumentation ---
         self._frame_count = 0
@@ -459,7 +484,7 @@ class ARWindow(QMainWindow):
                 "cam_x", "cam_y", "cam_z", "in_envelope", "env_tier",
                 "amb_rejected", "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
                 "visible_ids",
-            ] + tre_headers)
+            ] + tre_headers + ["jitter_mm", "jitter_depth_mm", "jitter_n"])
             print(f"Logging to: {args.log}")
 
         # --- Screenshot ---
@@ -480,123 +505,421 @@ class ARWindow(QMainWindow):
 
         print("Qt overlay running. Press 'q' or close window to quit.")
 
+    @property
+    def state(self):
+        return self.tracker.state
+
     def _build_ui(self):
-        """Video label as central widget, HUD widgets as its children."""
+        """Docked left rail + video. Overlays (triad, hint bar, help) sit on the video."""
         self.setWindowTitle("AR Spine Navigation")
+        self.setFocusPolicy(Qt.StrongFocus)
 
-        self.video_label = QLabel()
+        central = QWidget()
+        lay = QHBoxLayout(central)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self.rail = Rail(self.n_total, self.corner_lut.min_markers, self.selection.levels)
+        self.rail.selector.levelClicked.connect(lambda lv: self._select(self.selection.select, lv))
+        self.rail.selector.sideClicked.connect(lambda s_: self._select(self.selection.set_side, s_))
+        self.rail.selector.overviewClicked.connect(lambda: self._select(self.selection.overview))
+        self.rail.helpClicked.connect(self._toggle_help)
+        self.rail.viewToggled.connect(self._toggle_view)
+        self.rail.optionToggled.connect(self._toggle_option)
+        self.rail.engineerClicked.connect(self._toggle_engineer)
+        lay.addWidget(self.rail)
+
+        # The stage holds the camera view and the zoom view. They are placed by hand
+        # (see _layout_views) so the zoom can fill it with the camera as an inset.
+        self.stage = QWidget()
+        self.stage.setObjectName("viewGrid")
+        self.stage.setAttribute(Qt.WA_StyledBackground, True)
+        self.stage.setMinimumSize(640, 400)
+        self.stage.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label = ClickLabel(self.stage)
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black;")
-        self.video_label.setMinimumSize(640, 480)
-        self.setCentralWidget(self.video_label)
+        self.video_label.setStyleSheet(MAIN_STYLE)
+        self._main_style = MAIN_STYLE
+        self.zoom_pane = ViewPane("ZOOM", self.stage)
+        self.video_label.clicked.connect(self._on_main_click)
+        self.zoom_pane.clicked.connect(self._on_zoom_click)
+        self.zoom_pane.hide()
+        self.slice_dock = "rail"                      # where the panes are right now (the default move happens after the build)
+        self._main_w = 0
+        self._frame_aspect = 9 / 16                   # camera height / width, updated from the frames
+        lay.addWidget(self.stage, 1)
+        self.setCentralWidget(central)
 
-        # All HUD widgets are direct children of the video label
-        self.status_panel = StatusPanel(n_total=self.n_total,
-                                        gate=self.corner_lut.min_markers,
-                                        parent=self.video_label)
-        self.pose_panel = PosePanel(parent=self.video_label)
-        self.tre_panel = TrePanel(parent=self.video_label)
-        self.state_pill = StatePill(parent=self.video_label)
-        self.shortcuts_panel = ShortcutsPanel(parent=self.video_label)
-        self.axis_triad = AxisTriadWidget(parent=self.video_label)
-        self.target_radar = TargetRadarWidget(parent=self.video_label)
+        self.axis_triad = AxisTriadWidget(parent=self.stage)
+        self.axial_pane = self.rail.axial_pane            # the axial and sagittal views live in the rail
+        self.sagittal_pane = self.rail.sagittal_pane
+        # debug panels float over the video (top left) so the rail keeps its space for the axial view
+        self.debug_box = self.rail.engineer_box
+        self.debug_box.setParent(self.stage)
+        self.debug_box.setObjectName("debugCard")
+        self.debug_box.setAttribute(Qt.WA_StyledBackground, True)
+        self.debug_box.setMinimumWidth(230)
+        self.debug_box.setStyleSheet(
+            "#debugCard { background-color: rgba(14,18,22,228); border-top: 2px solid #3CC3C3; border-radius: 10px; }"
+            "#debugCard QFrame#hudPanel, #debugCard QFrame#hudPanel[accent=\"default\"],"
+            "#debugCard QFrame#hudPanel[accent=\"good\"], #debugCard QFrame#hudPanel[accent=\"warn\"],"
+            "#debugCard QFrame#hudPanel[accent=\"bad\"], #debugCard QFrame#hudPanel[accent=\"stale\"]"
+            " { background: transparent; border: none; }"
+            "#debugCard QLabel#railTitle { color: #3CC3C3; font-size: 10px; letter-spacing: 2px; }"
+            "#debugCard QLabel#hudLabel { font-size: 10px; letter-spacing: 1px; }"
+            "#debugCard QLabel#hudValue { font-size: 13px; }")
+        lay_ = self.debug_box.layout()
+        lay_.setContentsMargins(14, 10, 14, 10)
+        lay_.setSpacing(2)
+        for panel in (self.rail.status_panel, self.rail.pose_panel, self.rail.error_panel,
+                      self.rail.jitter_panel):
+            panel.setMinimumSize(0, 0)                    # the panels force a tall minimum height: drop it
+            panel.layout().setContentsMargins(0, 2, 0, 2)
+            panel.layout().setSpacing(0)
+        self.debug_box.hide()
+        self.zoom_ctl = ZoomControls(self.stage)
+        self.zoom_ctl.hide()
+        self.zoom_ctl.zoomIn.connect(lambda: self._step_zoom(+1))
+        self.zoom_ctl.zoomOut.connect(lambda: self._step_zoom(-1))
+        self.zoom_ctl.reset.connect(self._reset_zoom)
+        self.hint_bar = QLabel(parent=self.stage)
+        self.hint_bar.setObjectName("hintBar")
+        self.hint_bar.hide()
+        self.help = HelpOverlay(parent=self.stage)
+        self.stage.installEventFilter(self)              # re-layout when the stage resizes
 
-        # Focus indicator (bottom centre), styled to match the HUD panels
-        self.focus_label = QLabel(parent=self.video_label)
-        self.focus_label.setStyleSheet(
-            "background-color: rgba(16, 20, 26, 215); color: #E1E8EB;"
-            "border-top: 2px solid #3CC3C3; padding: 6px 14px;"
-            "font-family: Menlo, Consolas, monospace; font-size: 15px;")
-        self.focus_label.hide()
+        # Pre-polish the widgets that appear later, and warm the video label's two styles, so their
+        # first appearance does not stall a frame.
+        for wd in (self.zoom_pane, self.zoom_ctl, self.axial_pane, self.sagittal_pane):
+            wd.ensurePolished()
+            for ch in wd.findChildren(QWidget):
+                ch.ensurePolished()
+        self.video_label.setStyleSheet(INSET_STYLE)
+        self.video_label.ensurePolished()
+        self.video_label.setStyleSheet(MAIN_STYLE)
+        self.video_label.ensurePolished()
+        if SLICE_DOCK_DEFAULT == "right":
+            self._toggle_layout()
+        self.rail.set_option("outline", self.show_wire)
+        self.rail.set_option("circle", self.show_ellipses)
+        self.rail.set_view("axial", self.views["axial"])
+        self.rail.set_view("sagittal", self.views["sagittal"])
+        self.resize(1360, 800)
 
-        # Adjust sizes now so positioning works
-        for w in [self.status_panel, self.pose_panel, self.tre_panel,
-                  self.state_pill, self.shortcuts_panel]:
-            w.adjustSize()
-            w.show()
-            w.raise_()
-        self.axis_triad.show()
-        self.axis_triad.raise_()
-        self.target_radar.show()
-        self.target_radar.raise_()
+    # ---- overlay placement ----
 
-        # Toggle flags for optional widgets
-        self._show_triad = True
-        self._show_radar = True
-        self._show_shortcuts = True
+    def eventFilter(self, obj, event):
+        if obj is self.stage and event.type() == QEvent.Resize:
+            self._layout_views()
+        return super().eventFilter(obj, event)
 
-        self.resize(1280, 800)
+    def _layout_views(self):
+        """Place the camera view, the zoom view and (if docked on the right) the slice column."""
+        W, H = self.stage.width(), self.stage.height()
+        zoom_on = self.views["zoom"]
+        slices = [(self.axial_pane, self.views["axial"]), (self.sagittal_pane, self.views["sagittal"])]
+        on_panes = [p_ for p_, on in slices if on]
+        gap = 3
+        right = bool(on_panes) and self.slice_dock == "right"
+        cw = int(min(max(W * SLICE_COL_FRAC, 260), 480)) if right else 0
+        Wm = W - cw - (gap if right else 0)               # width left for the main view
+        self._main_w = Wm
+        # slice panes: a column on the right of the stage, or in the rail
+        if self.slice_dock == "right":
+            self.rail.slice_host.hide()
+            n = len(on_panes)
+            y = 0
+            for p_, on in slices:
+                if not on:
+                    p_.hide()
+                    continue
+                eh = (H - gap * (n - 1)) // n
+                p_.setGeometry(Wm + gap, y, cw, eh)
+                p_.show()
+                p_.raise_()
+                y += eh + gap
+        else:
+            for p_, on in slices:
+                p_.setVisible(on)
+            self.rail.slice_host.setVisible(bool(on_panes))
+        # main view: the camera fills the area, or (zoom) the zoom fills it with the camera as an inset
+        style = MAIN_STYLE
+        if not zoom_on:
+            self.zoom_pane.hide()
+            self.video_label.setGeometry(0, 0, Wm, H)
+        else:
+            iw = max(int(Wm * INSET_FRAC), 320)
+            ih = int(iw * self._frame_aspect)
+            m = 14
+            self.zoom_pane.setGeometry(0, 0, Wm, H)
+            self.zoom_pane.show()
+            self.video_label.setGeometry(Wm - iw - m, H - ih - m, iw, ih)
+            style = INSET_STYLE
+        if style != self._main_style:
+            self._main_style = style
+            self.video_label.setStyleSheet(style)
+        self.video_label.raise_()
+        self.zoom_ctl.setVisible(zoom_on)
+        if zoom_on:
+            self.zoom_ctl.adjustSize()
+            cwid, chei = self.zoom_ctl.width(), self.zoom_ctl.height()
+            ytop = self.axis_triad.y() + self.axis_triad.height() + 8      # never over the axes gizmo
+            self.zoom_ctl.move(Wm - cwid - 14, max(self.video_label.y() - 10 - chei, ytop))
+            self.zoom_ctl.raise_()
+        self._place_overlays()
 
-    def resizeEvent(self, event):
-        """Reposition HUD widgets when window resizes."""
-        super().resizeEvent(event)
-        w, h = self.width(), self.height()
+    def _place_overlays(self):
+        w, h = self.stage.width(), self.stage.height()
+        mw = self._main_w or w                               # width of the main view (the slice column is beyond it)
         pad = max(int(h * 0.02), 12)
-        gap = 12
+        self.axis_triad.move(mw - self.axis_triad.width() - pad, pad)
+        # the hint bar is centred in the space the camera inset leaves free
+        free_w = mw
+        if self.views["zoom"]:
+            free_w = self.video_label.x() - 14
+        self.hint_bar.adjustSize()
+        self.hint_bar.move(max((free_w - self.hint_bar.width()) // 2, 14), h - self.hint_bar.height() - pad)
+        self.help.adjustSize()
+        self.help.move((w - self.help.width()) // 2, (h - self.help.height()) // 2)
+        if self.engineer:
+            self.debug_box.adjustSize()
+            self.debug_box.move(14, 52 if self.views["zoom"] else 14)    # below the zoom tag
+            self.debug_box.show()
+            self.debug_box.raise_()
+        else:
+            self.debug_box.hide()
+        for wd in (self.axis_triad, self.hint_bar, self.help):
+            wd.raise_()
 
-        # ---- Top-left column: pose on top, status below ----
-        self.pose_panel.adjustSize()
-        self.pose_panel.move(pad, pad)
+    @property
+    def focus_level(self):
+        return self.selection.level
 
-        self.status_panel.adjustSize()
-        self.status_panel.move(pad, pad + self.pose_panel.height() + gap)
+    def _toggle_help(self):
+        on = not self.help.isVisible()
+        self.help.setVisible(on)
+        self.rail.set_help(on)
+        self._place_overlays()
 
-        # ---- Top-right column: axis triad on top, target radar below ----
-        triad_x = w - self.axis_triad.width() - pad
-        self.axis_triad.move(triad_x, pad)
+    def _toggle_fullscreen(self):
+        """Pause frame processing during the macOS fullscreen animation,
+        otherwise the busy event loop can freeze it."""
+        self.timer.stop()
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+        QTimer.singleShot(900, lambda: self.timer.start(33))
 
-        radar_x = w - self.target_radar.width() - pad
-        radar_y = pad + self.axis_triad.height() + gap
-        self.target_radar.move(radar_x, radar_y)
+    # ---- click to check: where is the real entry dot compared with the overlay? ----
 
-        # ---- Bottom-left: TRE panel ----
-        self.tre_panel.adjustSize()
-        tre_y = h - self.tre_panel.height() - pad
-        self.tre_panel.move(pad, tre_y)
+    def _on_main_click(self, pos):
+        if self.views["zoom"]:                    # the camera inset is too small to click on
+            return
+        clean = self._last_clean_bgr
+        if clean is None:
+            return
+        hit = image_pos(self.video_label, pos, clean.shape[1], clean.shape[0])
+        if hit is not None:
+            self._do_check(hit, "camera")
 
-        # ---- Top-center: state pill ----
-        self.state_pill.adjustSize()
-        self.state_pill.move((w - self.state_pill.width()) // 2, pad)
+    def _on_zoom_click(self, pos):
+        if self._zoom_xf is None:
+            return
+        w, h, x0, y0, mag = self._zoom_xf
+        hit = image_pos(self.zoom_pane, pos, w, h)
+        if hit is not None:
+            self._do_check((x0 + hit[0] / mag, y0 + hit[1] / mag), "zoom")
 
-        # ---- Bottom-centre: focus indicator ----
-        self._place_focus_label()
+    def _say(self, text, secs=8.0):
+        self._toast = (text, time.time() + secs)
 
-        # ---- Bottom-right: shortcuts panel ----
-        self.shortcuts_panel.adjustSize()
-        self.shortcuts_panel.move(
-            w - self.shortcuts_panel.width() - pad,
-            h - self.shortcuts_panel.height() - pad
-        )
+    def _do_check(self, cam_px, view):
+        """The click marks the real entry dot. Back-project it onto the plane through the selected entry
+        target (square to the camera) and measure the in-plane error, as the ATP-2 tool does."""
+        r, sel = self._last_r, self.selection
+        if sel.is_overview:
+            self._say("Pick a pedicle first (W / S, A / D), then click its real entry dot")
+            return
+        if r is None or r.state != "NAVIGATING" or r.rvec is None:
+            self._say("Tracking is needed to check the overlay")
+            return
+        e = sel.entry_idx
+        tgt = np.asarray(self.target_pts[e], float)
+        c = entry_check(cam_px, r.rvec, r.tvec, self.K, self.D, tgt)
+        Q, dv, err, depth = c["Q_mm"], c["dv_mm"], c["err_mm"], c["depth_mm"]
+        tp, err_px = c["target_px"], c["err_px"]
+        r95 = float(error_radius95(np.asarray(r.tre_values), self.anchor)[e]) if r.tre_values is not None else float("nan")
+        pred = float(r.tre_values[e]) if r.tre_values is not None else float("nan")
+        self.check = {"sel": sel.current, "Q": Q, "err": err, "within": bool(err <= r95)}
+        self._say(f"{sel.name.upper()}   {err:.1f} mm off   expected within {r95:.1f}   Esc clears")
+        print(f"Check {sel.name}: {err:.2f} mm (dx {dv[0]:+.2f}, dy {dv[1]:+.2f}, dz {dv[2]:+.2f}), "
+              f"expected within {r95:.2f} mm")
+        self._redraw_cached()                     # show the mark now, and in the saved window picture
+        shot = self._save_screenshot(quiet=True)  # clean frame + pose, so the offline tool can repeat it
+        self._log_check({
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"), "shot": shot or "",
+            "label": self.target_labels[e], "level": f"L{sel.level}", "side": sel.side, "view": view,
+            "distance_mm": round(float(r.distance_mm), 1), "elev_deg": round(float(r.elev_deg), 1),
+            "az_deg": round(float(r.az_deg), 1), "n_markers": int(r.n_markers),
+            "tier": r.env_tier, "rms_px": None if np.isnan(r.reproj_rms) else round(float(r.reproj_rms), 2),
+            "target_u": round(float(tp[0]), 2), "target_v": round(float(tp[1]), 2),
+            "dot_u": round(float(cam_px[0]), 2), "dot_v": round(float(cam_px[1]), 2),
+            "err_px": round(err_px, 2), "depth_mm": round(depth, 1), "err_mm": round(err, 3),
+            "dx_mm": round(float(dv[0]), 3), "dy_mm": round(float(dv[1]), 3), "dz_mm": round(float(dv[2]), 3),
+            "pred_tre_mm": round(pred, 3), "expected_95_mm": round(r95, 3),
+        })
 
-        # Ensure all widgets render on top of the pixmap
-        for widget in [self.status_panel, self.pose_panel, self.tre_panel,
-                       self.state_pill, self.shortcuts_panel,
-                       self.axis_triad, self.target_radar]:
-            widget.raise_()
+    def _log_check(self, row):
+        import csv
+        path = self._screenshot_dir / "click_checks.csv"
+        new = not path.exists()
+        with open(path, "a", newline="") as fh:
+            wr = csv.DictWriter(fh, fieldnames=list(row.keys()))
+            if new:
+                wr.writeheader()
+            wr.writerow(row)
 
-    def _place_focus_label(self):
-        self.focus_label.adjustSize()
-        self.focus_label.move((self.width() - self.focus_label.width()) // 2,
-                              self.height() - self.focus_label.height()
-                              - max(int(self.height() * 0.02), 12))
+    def _draw_check(self, frame, rvec, tvec, K, D, target_mm):
+        """The clicked point (pinned to the phantom) with a line to the overlay's entry point and the error."""
+        pts = np.vstack([self.check["Q"], np.asarray(target_mm, float)]).astype(np.float64)
+        proj, _ = cv2.projectPoints(pts, rvec, tvec, K, D)
+        (qx, qy), (tx, ty) = proj.reshape(2, 2)
+        fw = frame.shape[1]
+        colour = (140, 210, 100) if self.check["within"] else (90, 90, 215)       # BGR green / red
+        arm = max(7, fw // 150)
+        q, tg = (int(round(qx)), int(round(qy))), (int(round(tx)), int(round(ty)))
+        cv2.line(frame, tg, q, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(frame, tg, q, (255, 255, 255), 1, cv2.LINE_AA)
+        for col, th in (((0, 0, 0), 4), (colour, 2)):
+            cv2.line(frame, (q[0] - arm, q[1] - arm), (q[0] + arm, q[1] + arm), col, th, cv2.LINE_AA)
+            cv2.line(frame, (q[0] - arm, q[1] + arm), (q[0] + arm, q[1] - arm), col, th, cv2.LINE_AA)
+        txt = f"{self.check['err']:.1f} mm"
+        fs = min(max(fw / 2200.0, 0.45), 1.0)
+        org = (q[0] + arm + 6, q[1] - arm - 4)
+        cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, fs, colour, 2, cv2.LINE_AA)
 
-    def _update_focus_label(self):
-        show = (self.vertebrae is not None and self.state == "NAVIGATING"
-                and self.focus_level is not None)
-        if show:
-            levels = sorted(self.level_idx)
-            k = levels.index(self.focus_level)
-            prev_t = f"L{levels[k - 1]}" if k > 0 else "all levels"
-            next_t = f"L{levels[k + 1]}" if k < len(levels) - 1 else "all levels"
-            txt = (f"FOCUS  L{self.focus_level}      "
-                   f"Left/Up: {prev_t}    Right/Down: {next_t}    A: all levels")
-            if self.focus_label.text() != txt:
-                self.focus_label.setText(txt)
-                self._place_focus_label()
-            self.focus_label.show()
-            self.focus_label.raise_()
-        elif self.focus_label.isVisible():
-            self.focus_label.hide()
+    def _redraw_cached(self):
+        """After a layout change, redraw the views from the last camera frame right away, instead of
+        showing stale pixmaps at the new size until the next frame arrives."""
+        r, clean = self._last_r, getattr(self, "_last_clean_bgr", None)
+        if r is None or clean is None:
+            return
+        frame = clean.copy()
+        self._draw_overlays(frame, r)
+        if self.views["zoom"]:
+            self._render_zoom(clean, r, frame)
+        for kind in ("axial", "sagittal"):
+            if self.views[kind]:
+                self._render_slice(kind, r)
+        self._show_frame(frame)
+
+    def _toggle_view(self, name):
+        """Switch an extra view on or off; the side column shows only if some view is on."""
+        self.views[name] = not self.views[name]
+        self.rail.set_view(name, self.views[name])
+        self._layout_views()
+        self._redraw_cached()
+
+    def _step_zoom(self, d):
+        """+ / - : move along FOV_STEPS (clamped). Opens the zoom view first if it is off."""
+        if not self.views["zoom"]:
+            if d > 0:
+                self._toggle_view("zoom")
+            return
+        self.zoom_idx = min(max(self.zoom_idx + d, 0), len(FOV_STEPS) - 1)
+
+    def _reset_zoom(self):
+        """Back to the plain camera view (the zoom level is remembered for next time)."""
+        if self.views["zoom"]:
+            self._toggle_view("zoom")
+
+    def wheelEvent(self, event):
+        if self.views["zoom"] and self.zoom_pane.geometry().contains(self.stage.mapFrom(self, event.position().toPoint())):
+            self._wheel_acc += event.angleDelta().y()
+            while abs(self._wheel_acc) >= 120:             # one step per wheel notch (trackpad: per 120 units)
+                self._step_zoom(1 if self._wheel_acc > 0 else -1)
+                self._wheel_acc -= 120 if self._wheel_acc > 0 else -120
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def _toggle_option(self, name):
+        """Y outline, E error circle, V side views: the keys and the rail buttons both come here."""
+        if name == "outline":
+            self.show_wire = not self.show_wire
+            self.rail.set_option("outline", self.show_wire)
+        elif name == "circle":
+            self.show_ellipses = not self.show_ellipses
+            self.rail.set_option("circle", self.show_ellipses)
+        elif name == "layout":
+            self._toggle_layout()
+            return
+        self._redraw_cached()
+
+    def _toggle_layout(self):
+        """V: move the axial and sagittal views between the rail and a column beside the main view."""
+        panes = [self.axial_pane, self.sagittal_pane]
+        if self.slice_dock == "rail":
+            self.slice_dock = "right"
+            for p_ in panes:
+                p_.setParent(self.stage)
+                p_.hide()
+        else:
+            self.slice_dock = "rail"
+            self.rail.dock_slices(panes)
+        self.rail.set_option("layout", self.slice_dock == "right")
+        self._layout_views()
+        self._redraw_cached()
+
+    def _toggle_engineer(self):
+        self.engineer = not self.engineer
+        self.rail.set_engineer(self.engineer)
+        self._place_overlays()
+
+    def _friendly(self, j):
+        """'L3_E_R' -> 'L3 right'."""
+        p = parse_label(self.target_labels[j])
+        return f"L{p[0]} {SIDE_NAMES[p[1]]}" if p else str(self.target_labels[j])
+
+    def _hint_free_width(self):
+        """Width the hint bar may use: the main view, minus the camera inset in zoom mode, minus margins."""
+        mw = self._main_w or self.stage.width()
+        free = (self.video_label.x() - 14) if self.views["zoom"] else mw
+        return max(free - 28, 120)
+
+    def _update_hint(self, r):
+        """One line at the bottom of the video: what the keys do right now. Longer wording is
+        swapped for shorter wording when the bar would not fit beside the camera inset."""
+        name = self.selection.name.upper()
+        if self._toast is not None and time.time() < self._toast[1]:
+            options = [self._toast[0], self._toast[0].replace("   Esc clears", "")]
+        elif r.state != "NAVIGATING":
+            options = [{"VERIFYING": "C  confirm      R  reject",
+                        "STALE": "Bring the markers back into view"}.get(r.state, "")]
+        elif self.selection.is_overview:
+            options = ["ALL LEVELS      W/S or A/D  pick a pedicle", "ALL LEVELS   W/S  A/D  pick", "ALL LEVELS"]
+        else:
+            options = [f"{name}      W/S  level      A/D  side      T  all levels",
+                       f"{name}    W/S  level    A/D  side",
+                       f"{name}    W/S  A/D", name]
+        if not options[0]:
+            self.hint_bar.hide()
+            return
+        avail = self._hint_free_width()
+        key = (tuple(options), avail)
+        if key != getattr(self, "_hint_key", None):
+            self._hint_key = key
+            for txt in options:                       # first wording that fits
+                self.hint_bar.setText(txt)
+                self.hint_bar.adjustSize()
+                if self.hint_bar.width() <= avail:
+                    break
+            self._place_overlays()
+        self.hint_bar.show()
+        self.hint_bar.raise_()
+
 
     # ================================================================
     # Frame loop
@@ -617,244 +940,28 @@ class ARWindow(QMainWindow):
         t1 = time.perf_counter()
 
         now = time.time()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self.detector.detectMarkers(gray)
-
-        # --- Multi-marker PnP ---
-        pnp_ok = False
-        n_markers = 0
-        reproj_rms = float("nan")
-        distance_mm = elev_deg = az_deg = 0.0
-        cam_pos = np.zeros(3)
-        in_env = False
-        env_tier = "outside"
-        amb_rejected = False   # single-face solution discarded by the side check
-        tre_values = None
-        visible_ids = []
-        rvec = tvec = None
-
-        if ids is not None and len(ids) > 0:
-            cv2.aruco.drawDetectedMarkers(frame, corners, ids,
-                                          borderColor=(60, 160, 60))
-            pnp_ok, rvec, tvec, n_markers, reproj_rms = multi_marker_pnp(
-                ids, corners, self.corner_lut, self.K, self.D,
-                self.prev_rvec, self.prev_tvec,
-            )
-            if pnp_ok:
-                cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                visible_ids = [m for m in ids.flatten() if m in self.corner_lut]
-
-                # Reject mirrored PnP solution (planar ambiguity).
-                # The mirror places the camera hundreds of mm on the wrong
-                # side. Use generous margins (100mm) to allow oblique views.
-                if self.is_v3:
-                    face_a_only = all(m < 4 for m in visible_ids)
-                    face_b_only = all(m >= 4 for m in visible_ids)
-
-                    if face_a_only and cam_pos[2] > -103.7 + 100:
-                        pnp_ok = False  # camera way too cranial for Face A
-                        amb_rejected = True
-                    elif face_b_only and cam_pos[0] < 70.1 - 100:
-                        pnp_ok = False  # camera way too medial for Face B
-                        amb_rejected = True
-
-                # Per-marker reprojection error (debug: find geometry mismatches)
-                if pnp_ok and (reproj_rms > 5.0 or getattr(self, "_print_residuals", False)):
-                    self._print_residuals = False
-                    for mid, c2d in zip(ids.flatten(), corners):
-                        if mid in self.corner_lut:
-                            obj = self.corner_lut[mid]
-                            rep, _ = cv2.projectPoints(
-                                obj, rvec, tvec, self.K, self.D)
-                            err = np.linalg.norm(
-                                rep.reshape(4, 2) - c2d.reshape(4, 2), axis=1)
-                            print(f"  ID {mid}: reproj err = "
-                                  f"{err.mean():.1f}px (corners: "
-                                  f"{err.round(1).tolist()})")
-
-                if pnp_ok:
-                    self.prev_rvec, self.prev_tvec = rvec.copy(), tvec.copy()
-                    self.last_good_time = now
-                    env_tier = envelope_tier(elev_deg, az_deg, distance_mm) if self.is_v3 else "full"
-                    in_env = env_tier == "full"
-                    tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
-                                                    self.target_pts, self.args.fle)
-
-                    if self.state == "STALE":
-                        # Brief dropout recovered: resume where we were.
-                        # VERIFYING keeps its countdown, NAVIGATING stays put.
-                        self.state = self._pre_stale_state or "VERIFYING"
-                        self._pre_stale_state = None
-                    elif self.state == "SEARCHING":
-                        self.state = "VERIFYING"
-                        self.verify_start_time = now
-
-        # --- Stale / lost ---
-        if not pnp_ok:
-            if (self.prev_rvec is not None and
-                    (now - self.last_good_time) < STALE_HOLD_SEC):
-                if self.state not in ("SEARCHING", "STALE"):
-                    self._pre_stale_state = self.state
-                    self.state = "STALE"
-                rvec, tvec = self.prev_rvec, self.prev_tvec
-                cam_pos, distance_mm, elev_deg, az_deg = decompose_pose(rvec, tvec)
-                env_tier = envelope_tier(elev_deg, az_deg, distance_mm) if self.is_v3 else "reduced"
-                in_env = env_tier == "full"
-                tre_values = compute_tre_scalar(visible_ids, self.corner_lut,
-                                                self.target_pts, self.args.fle)
-            else:
-                self.state = "SEARCHING"
-                self._pre_stale_state = None
-                self.prev_rvec = self.prev_tvec = None
-                visible_ids = []
-
-        # --- Verify countdown ---
-        if self.state == "VERIFYING":
-            if (now - self.verify_start_time) >= VERIFY_COUNTDOWN_SEC:
-                self.state = "NAVIGATING"
-                print("Registration confirmed (auto).")
+        r = self.tracker.process(frame, now)          # tracking: no drawing
+        self._update_jitter(r)
 
         t2 = time.perf_counter()
 
-        # --- On-frame overlays (drawn onto numpy frame) ---
-        doff = DETACH_OFFSET_PX if self.detach else 0
-
-        if self.state in ("VERIFYING", "NAVIGATING", "STALE"):
-            if (self.show_wire and self.vertebrae is not None
-                    and self.state != "STALE"):
-                # UI v2: VERIFYING shows every level; NAVIGATING shows the
-                # focused level bold with neighbours ghosted (or all levels
-                # if no focus is set).
-                sel = self.focus_level if self.state == "NAVIGATING" else None
-                draw_vertebra_layers(frame, self.vertebrae,
-                                     rvec, tvec, self.K, self.D, selected=sel)
-            elif (self.show_wire and self.mesh_verts is not None
-                    and self.state != "STALE"):
-                draw_wireframe(frame, self.mesh_verts,
-                               self.mesh_edge_i0, self.mesh_edge_i1,
-                               self.mesh_edge_normals,
-                               rvec, tvec, self.K, self.D, cam_pos)
-
-            if self.state == "NAVIGATING" and tre_values is not None:
-                # Focus mode: one level shows entry, isthmus, trajectory and guide.
-                # All-levels mode: entry points and trajectory lines only.
-                fl = self.focus_level
-                focus = fl is not None and fl in self.level_idx
-                tre_arr = np.asarray(tre_values)
-                if focus:
-                    ix = self.level_idx[fl]
-                else:
-                    ix = self.entry_idx                      # isthmus dots hidden
-                f_pts = self.target_pts[ix]
-                f_labels = [self.target_labels[i] for i in ix]
-                f_tre = tre_arr[ix]
-
-                if self.show_traj:
-                    if focus:
-                        pos = {g: k for k, g in enumerate(ix)}
-                        for ia, ib in self.traj_pairs:       # (isthmus, entry)
-                            if ia in pos and ib in pos:
-                                # guide colour follows the worse of the two ends
-                                oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), env_tier)
-                                      if GUIDE_BY_STATUS else None)
-                                draw_focus_trajectory(
-                                    frame, self.target_pts[ib], self.target_pts[ia],
-                                    rvec, tvec, self.K, self.D, doff, status_colour=oc)
-                    else:
-                        for ia, ib in self.traj_pairs:       # (isthmus, entry)
-                            oc = (tre_colour(max(tre_arr[ia], tre_arr[ib]), env_tier)
-                                  if GUIDE_BY_STATUS else None)
-                            draw_overview_trajectory(
-                                frame, self.target_pts[ib], self.target_pts[ia],
-                                rvec, tvec, self.K, self.D, doff, status_colour=oc)
-
-                _NoOpTR = type("_NR", (), {
-                    "h": frame.shape[0], "w": frame.shape[1],
-                    "text": lambda self, *a, **k: None,
-                    "measure": lambda self, *a, **k: (0, 0),
-                })()
-                draw_targets(frame, f_pts, f_labels,
-                             f_tre, rvec, tvec, self.K, self.D,
-                             visible_ids, self.corner_lut, self.args.fle,
-                             env_tier, _NoOpTR, self.show_ellipses, doff,
-                             (0, 0, 0) if (MARKERS_BLACK and focus) else None)
+        self._draw_overlays(frame, r)                 # drawing onto the numpy frame
+        if self.views["zoom"]:
+            self._render_zoom(clean, r, frame)        # separate view, redrawn at full resolution
+        if self.views["axial"]:
+            self._render_slice("axial", r)
+        if self.views["sagittal"]:
+            self._render_slice("sagittal", r)
 
         t3 = time.perf_counter()
 
-        # --- Update Qt widgets (only if values changed) ---
-        self.status_panel.update_values(n_markers, pnp_ok, reproj_rms)
-        self.status_panel.set_accent({
-            "SEARCHING": "stale",
-            "VERIFYING": "default",
-            "NAVIGATING": "good",
-            "STALE": "bad",
-        }.get(self.state, "default"))
-
-        self.pose_panel.update_values(distance_mm, elev_deg, az_deg, env_tier)
-        self.pose_panel.set_accent(
-            {"full": "good", "reduced": "warn"}.get(env_tier, "bad"))
-
-        tp_vals, tp_labels = tre_values, self.target_labels
-        if (self.focus_level is not None and self.state == "NAVIGATING"
-                and tre_values is not None and self.focus_level in self.level_idx):
-            # Focus mode: show the selected vertebra's entry point nearest the camera.
-            ent = [i for i in self.level_idx[self.focus_level]
-                   if "_E_" in self.target_labels[i]]
-            if ent:
-                j = min(ent, key=lambda i: np.linalg.norm(self.target_pts[i] - cam_pos))
-                tp_vals = np.asarray(tre_values)[[j]]
-                tp_labels = [self.target_labels[j]]
-        self.tre_panel.update_values(tp_vals, tp_labels, env_tier)
-
-        # State pill
-        countdown = 0.0
-        if self.state == "VERIFYING":
-            countdown = VERIFY_COUNTDOWN_SEC - (now - self.verify_start_time)
-        self.state_pill.set_state(self.state, countdown)
-
-        # Axis triad
-        if self._show_triad and pnp_ok and self.state != "SEARCHING":
-            self.axis_triad.set_rvec(rvec)
-            if not self.axis_triad.isVisible():
-                self.axis_triad.show()
-        else:
-            self.axis_triad.set_rvec(None)
-
-        # Target radar
-        if self._show_radar and self.state == "NAVIGATING":
-            self.target_radar.set_tre_values(tre_values, self.target_labels, env_tier)
-            if not self.target_radar.isVisible():
-                self.target_radar.show()
-        else:
-            self.target_radar.set_tre_values(None, [], env_tier)
-
-        self._update_focus_label()
-
-        # Reposition state pill (its width changes with countdown text)
-        w = self.width()
-        self.state_pill.move((w - self.state_pill.width()) // 2,
-                             max(int(self.height() * 0.02), 12))
+        self._update_widgets(r)                       # Qt HUD
 
         # --- Push frame to video label ---
+        self._last_r = r
         self._last_frame_bgr = frame.copy()
         self._last_clean_bgr = clean
-        if rvec is not None:
-            self._last_pose = {
-                "rvec": np.asarray(rvec).ravel().tolist(),
-                "tvec": np.asarray(tvec).ravel().tolist(),
-                "state": self.state,
-                "pnp_ok": bool(pnp_ok),
-                "n_markers": int(n_markers),
-                "rms_px": None if np.isnan(reproj_rms) else float(reproj_rms),
-                "visible_ids": [int(i) for i in visible_ids],
-                "distance_mm": float(distance_mm),
-                "elevation_deg": float(elev_deg),
-                "azimuth_deg": float(az_deg),
-                "env_tier": env_tier,
-                "focus_level": self.focus_level,
-            }
-        else:
-            self._last_pose = None
+        self._last_pose = self._pose_dict(r)
         self._show_frame(frame)
 
         t4 = time.perf_counter()
@@ -872,35 +979,336 @@ class ARWindow(QMainWindow):
             self._frame_count = 0
             self._last_log = t4
 
-        # --- CSV data log (every frame) ---
-        if self._csv_writer is not None:
-            tre_vals = []
-            if tre_values is not None:
-                tre_vals = [f"{v:.3f}" for v in tre_values]
+        self._log_row(r, (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+        if self._scene_file is not None:
+            self._scene_file.write(scene_to_json(self.scene) + "\n")
+
+    # ---- rendering: draws the FrameResult onto the numpy frame ----
+
+    def _draw_overlays(self, frame, r):
+        """Main view: engineer boxes, then the scene with the real camera matrix."""
+        if self.engineer and r.ids is not None and len(r.ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, r.corners, r.ids,
+                                          borderColor=(60, 160, 60))
+        self._draw_scene(frame, r, self.K, self.D)
+
+    def _draw_scene(self, frame, r, K, D, zoom=False):
+        """Draw the model and the selected pedicle onto `frame`, projected with camera matrix K.
+        The main view passes the camera's K; the zoom view passes a K that matches its crop."""
+        state, rvec, tvec = r.state, r.rvec, r.tvec
+        if state not in ("VERIFYING", "NAVIGATING", "STALE"):
+            return
+
+        if self.show_wire and self.vertebrae is not None and state != "STALE":
+            # UI v2: VERIFYING shows every level; NAVIGATING shows the
+            # focused level bold with neighbours ghosted (or all levels
+            # if no focus is set).
+            sel = self.focus_level if state == "NAVIGATING" else None
+            if zoom:                                     # thicker line, exact faint fill
+                draw_vertebra_layers(frame, self.vertebrae, rvec, tvec, K, D, selected=sel,
+                                     style=ZOOM_STYLE if sel is not None else ZOOM_ALL_STYLE,
+                                     exact_fill=sel is not None)
             else:
-                tre_vals = [""] * len(self.target_labels)
-            self._csv_writer.writerow([
-                f"{now:.3f}", self._step, self.state, n_markers, pnp_ok,
-                f"{reproj_rms:.2f}" if not np.isnan(reproj_rms) else "",
-                f"{distance_mm:.1f}", f"{elev_deg:.1f}", f"{az_deg:.1f}",
-                f"{cam_pos[0]:.1f}", f"{cam_pos[1]:.1f}", f"{cam_pos[2]:.1f}",
-                in_env, env_tier, int(amb_rejected),
-                f"{(t1-t0)*1000:.1f}", f"{(t2-t1)*1000:.1f}",
-                f"{(t3-t2)*1000:.1f}", f"{(t4-t3)*1000:.1f}",
-                "|".join(str(i) for i in visible_ids),
-            ] + tre_vals)
-            self._csv_file.flush()
+                draw_vertebra_layers(frame, self.vertebrae,
+                                     rvec, tvec, K, D, selected=sel)
+        elif (self.show_wire and self.mesh_verts is not None
+                and state != "STALE"):
+            draw_wireframe(frame, self.mesh_verts,
+                           self.mesh_edge_i0, self.mesh_edge_i1,
+                           self.mesh_edge_normals,
+                           rvec, tvec, K, D, r.cam_pos)
+
+        if state == "NAVIGATING" and r.tre_values is not None:
+            # One pedicle selected: its entry, isthmus, trajectory and guide, nothing else.
+            # Overview: every entry point with a thin trajectory line.
+            # Colours grade the expected 95 % error (measured, see ar_error.py),
+            # not the raw predicted TRE.
+            sel_ = self.selection
+            focus = not sel_.is_overview
+            r95 = error_radius95(np.asarray(r.tre_values), self.anchor)
+            status = [grade(v, r.env_tier) for v in r95]
+            colour = [grade_colour(st) for st in status]
+            if focus:
+                ix = np.array([sel_.isthmus_idx, sel_.entry_idx], dtype=int)
+            else:
+                ix = self.entry_idx                      # isthmus dots hidden
+            f_pts = self.target_pts[ix]
+            f_labels = [self.target_labels[i] for i in ix]
+            f_tre = np.asarray(r.tre_values)[ix]
+            f_col = [colour[i] for i in ix]
+
+            def worse(ia, ib):                           # guide takes the worse end
+                return colour[ia if r95[ia] >= r95[ib] else ib] if GUIDE_BY_STATUS else None
+
+            if focus:
+                ia, ib = sel_.isthmus_idx, sel_.entry_idx
+                draw_focus_trajectory(
+                    frame, self.target_pts[ib], self.target_pts[ia],
+                    rvec, tvec, K, D, status_colour=worse(ia, ib))
+            else:
+                for ia, ib in self.traj_pairs:           # (isthmus, entry)
+                    draw_overview_trajectory(
+                        frame, self.target_pts[ib], self.target_pts[ia],
+                        rvec, tvec, K, D, status_colour=worse(ia, ib))
+
+            _NoOpTR = type("_NR", (), {
+                "h": frame.shape[0], "w": frame.shape[1],
+                "text": lambda self, *a, **k: None,
+                "measure": lambda self, *a, **k: (0, 0),
+            })()
+            draw_targets(frame, f_pts, f_labels,
+                         f_tre, rvec, tvec, K, D,
+                         r.visible_ids, self.corner_lut, self.args.fle,
+                         r.env_tier, _NoOpTR,
+                         show_ell=self.show_ellipses and not focus,   # random-noise ellipses only in overview
+                         marker_col=(0, 0, 0) if (MARKERS_BLACK and focus) else None,
+                         colours=f_col)
+            if focus and self.show_ellipses:
+                # true-scale 95 % error circle around the entry point
+                e = sel_.entry_idx
+                draw_error_circle(frame, self.target_pts[e], r95[e],
+                                  rvec, tvec, K, D, colour[e])
+            if focus and self.check is not None and self.check["sel"] == sel_.current:
+                self._draw_check(frame, rvec, tvec, K, D, self.target_pts[sel_.entry_idx])
+
+    def _render_zoom(self, clean, r, frame):
+        """Zoom view: crop the clean camera frame around the selected entry point, magnify it,
+        and draw the same scene on it with the matching camera matrix."""
+        pane = self.zoom_pane
+        sel = self.selection
+        can_in, can_out = self.zoom_idx < len(FOV_STEPS) - 1, self.zoom_idx > 0
+        self._zoom_xf = None
+        self.zoom_ctl.set_state(None, can_in, can_out)
+        if r.state != "NAVIGATING" or r.rvec is None:
+            pane.set_tag("ZOOM")
+            pane.show_message("Waiting for tracking")
+            return
+        w, h = pane.render_size()
+        if sel.is_overview:
+            # all levels: centre on the middle of the ten entry points and fit them with a margin;
+            # the +/- steps then scale that fit (the default step is the fit itself)
+            pts = [project_point(self.target_pts[i], r.rvec, r.tvec, self.K, self.D) for i in sel.all_entry_idx]
+            pts = [p_ for p_ in pts if p_ is not None]
+            if not pts:
+                pane.show_message("Targets are behind the camera")
+                return
+            xy = np.array([[p_[0], p_[1]] for p_ in pts])
+            lo, hi = xy.min(axis=0), xy.max(axis=0)
+            e = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, float(np.mean([p_[2] for p_ in pts])))
+            ppm = 0.5 * (self.K[0, 0] + self.K[1, 1]) / e[2]
+            need_px = max((hi[0] - lo[0]) * 1.5, (hi[1] - lo[1]) * 1.5 * w / h, 160.0)
+            fov = need_px / ppm * FOV_STEPS[self.zoom_idx] / FOV_STEPS[ZOOM_DEFAULT]
+            name = "ALL LEVELS"
+        else:
+            e = project_point(self.target_pts[sel.entry_idx], r.rvec, r.tvec, self.K, self.D)
+            if e is None:
+                pane.show_message("Entry point is behind the camera")
+                return
+            ppm = 0.5 * (self.K[0, 0] + self.K[1, 1]) / e[2]      # camera pixels per mm at the entry point
+            fov = FOV_STEPS[self.zoom_idx]
+            name = sel.name.upper()
+        img, Kz, mag = zoom_frame(clean, self.K, (e[0], e[1]), ppm, w, h, fov)
+        self._draw_scene(img, r, Kz, self.D, zoom=True)
+        pane.set_tag(f"ZOOM  {name}  {fov:.0f} mm")
+        pane.show_frame(img)
+        self._zoom_xf = (w, h, e[0] - w / (2.0 * mag), e[1] - h / (2.0 * mag), mag)
+        self.zoom_ctl.set_state(mag, can_in, can_out)
+        # box on the camera view around the area the zoom is showing
+        fh = frame.shape[0]
+        x0, y0 = e[0] - w / (2.0 * mag), e[1] - h / (2.0 * mag)
+        p0 = (int(round(x0)), int(round(y0)))
+        p1 = (int(round(x0 + w / mag)), int(round(y0 + h / mag)))
+        t = max(3, fh // 220)
+        fw = frame.shape[1]
+        cx0, cy0, cx1, cy1 = max(p0[0], 0), max(p0[1], 0), min(p1[0], fw), min(p1[1], fh)
+        if cx1 > cx0 and cy1 > cy0:                    # faint teal fill so the box stands out
+            roi = frame[cy0:cy1, cx0:cx1]
+            tint = np.empty_like(roi)
+            tint[:] = BOX_BGR
+            cv2.addWeighted(roi, 1.0 - BOX_FILL, tint, BOX_FILL, 0, roi)
+        cv2.rectangle(frame, p0, p1, (0, 0, 0), t + 2, cv2.LINE_AA)
+        cv2.rectangle(frame, p0, p1, BOX_BGR, t, cv2.LINE_AA)
+
+    def _slice_view(self, kind):
+        """Cached slice for the selected pedicle (depends on the selection only, not the camera)."""
+        sel = self.selection
+        key = (kind, sel.current)
+        if key not in self._slice_cache:
+            mesh = None if self.vertebrae is None else self.vertebrae.get(sel.level)
+            self._slice_cache[key] = None if mesh is None else SliceView(
+                mesh, self.target_pts[sel.entry_idx], self.target_pts[sel.isthmus_idx], kind)
+        return self._slice_cache[key]
+
+    def _render_slice(self, kind, r):
+        """Rail inset: axial cross-section or sagittal side view of the selected vertebra,
+        with the planned trajectory."""
+        pane = self.axial_pane if kind == "axial" else self.sagittal_pane
+        title = kind.upper()
+        sel = self.selection
+        pane.set_tag(title if sel.is_overview else f"{title}  {sel.name.upper()}")
+        if sel.is_overview:
+            pane.show_message("Pick a pedicle\nW / S  A / D")
+            return
+        sl = self._slice_view(kind)
+        if sl is None or not sl.ok:
+            pane.show_message("No slice for this level")
+            return
+        colour, r95_mm = NEUTRAL, None
+        if r.state == "NAVIGATING" and r.tre_values is not None:
+            r95_all = error_radius95(np.asarray(r.tre_values), self.anchor)
+            r95_mm = float(r95_all[sel.entry_idx])
+            colour = grade_colour(grade(r95_mm, r.env_tier))
+        w, h = pane.render_size()                       # fill the whole pane: no empty borders
+        top = int((pane.tag.height() + 14) * pane.devicePixelRatioF())      # keep clear of the title tag
+        pane.show_frame(sl.render(w, h, colour, r95_mm, top))
+
+    # ---- HUD: pushes the FrameResult into the Qt widgets ----
+
+    def _update_widgets(self, r):
+        rail = self.rail
+        rail.state_pill.set_state(r.state, r.verify_remaining)
+        self.scene = sc = build_scene(r, self.selection, self.target_pts, self.target_labels,
+                                      self.anchor, self.is_v3, self.n_total, self._jitter_val)
+        t = sc["trust"]
+        rail.trust.update_state(t["status"], t["title"], t["reason"])
+        rail.selector.set_state(self.selection.level, self.selection.side)
+
+        j, r95_mm, status = self._error_summary(r)
+        if j is None:
+            rail.card.update_state(self.selection.name, None, "muted",
+                                   "Waiting for tracking")
+        elif self.selection.is_overview:
+            rail.card.update_state("All levels", r95_mm, status,
+                                   f"Worst entry point: {self._friendly(j)}. 95% of the time within this.")
+        else:
+            if self.check is not None and self.check["sel"] == self.selection.current:
+                extra = f"Last check: {self.check['err']:.1f} mm off the real dot. Click it again to redo."
+            else:
+                extra = "Click the real entry dot to check the overlay."
+            rail.card.update_state(self.selection.name, r95_mm, status,
+                                   f"Expected error at the entry point. 95% of the time within this. {extra}")
+
+        if self.engineer:
+            rail.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
+            rail.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
+            err = sc["error"]
+            if err is None:
+                rail.error_panel.update_values(None, None, None)
+            else:
+                rail.error_panel.update_values(err["label"], sc["targets"][err["target"]]["tre_mm"], err["r95_mm"])
+            rail.jitter_panel.update_values(self._jitter_val)
+
+        if r.pnp_ok and r.state != "SEARCHING":
+            self.axis_triad.set_rvec(r.rvec)
+            if not self.axis_triad.isVisible():
+                self.axis_triad.show()
+        else:
+            self.axis_triad.set_rvec(None)
+
+        self._update_hint(r)
+
+    def _error_summary(self, r):
+        """(target index, 95 % error mm, status). One pedicle selected: its entry point.
+        Overview: the worst entry point. Index is None when there is nothing to show."""
+        return error_summary(r, self.selection, self.anchor)
+
+    def _update_jitter(self, r):
+        """Feed the rolling window; measure only when someone looks (debug card) or logs (CSV).
+        Selected pedicle: its entry point. All levels: the worst of the ten entry points."""
+        self.jitter.update(r)
+        self._jitter_val = None
+        if not (self.engineer or self._csv_writer is not None or self._scene_file is not None):
+            return
+        pts = self.target_pts[self.entry_idx] if self.selection.is_overview \
+            else self.target_pts[[self.selection.entry_idx]]
+        m = self.jitter.measure(pts)
+        if m is None:
+            return
+        total, depth, _ = m
+        j = int(np.argmax(total))
+        self._jitter_val = (float(total[j]), float(depth[j]), self.jitter.n_samples)
+
+    def _jitter_csv(self):
+        v = self._jitter_val
+        return ["", "", ""] if v is None else [f"{v[0]:.3f}", f"{v[1]:.3f}", v[2]]
+
+    def _pose_dict(self, r):
+        """Pose and status saved next to screenshots (None if there is no pose)."""
+        if r.rvec is None:
+            return None
+        return {
+            "rvec": np.asarray(r.rvec).ravel().tolist(),
+            "tvec": np.asarray(r.tvec).ravel().tolist(),
+            "state": r.state,
+            "pnp_ok": bool(r.pnp_ok),
+            "n_markers": int(r.n_markers),
+            "rms_px": None if np.isnan(r.reproj_rms) else float(r.reproj_rms),
+            "visible_ids": [int(i) for i in r.visible_ids],
+            "distance_mm": float(r.distance_mm),
+            "elevation_deg": float(r.elev_deg),
+            "azimuth_deg": float(r.az_deg),
+            "env_tier": r.env_tier,
+            "focus_level": self.selection.level,
+            "focus_side": self.selection.side,
+            "expected_error_95_mm": self._error_summary(r)[1],
+        }
+
+    def _log_row(self, r, dts):
+        """One CSV row per frame (ATP logging). dts = grab, detect+pnp, overlay, qt seconds."""
+        if self._csv_writer is None:
+            return
+        if r.tre_values is not None:
+            tre_vals = [f"{v:.3f}" for v in r.tre_values]
+        else:
+            tre_vals = [""] * len(self.target_labels)
+        cam = r.cam_pos
+        self._csv_writer.writerow([
+            f"{r.now:.3f}", self._step, r.state, r.n_markers, r.pnp_ok,
+            f"{r.reproj_rms:.2f}" if not np.isnan(r.reproj_rms) else "",
+            f"{r.distance_mm:.1f}", f"{r.elev_deg:.1f}", f"{r.az_deg:.1f}",
+            f"{cam[0]:.1f}", f"{cam[1]:.1f}", f"{cam[2]:.1f}",
+            r.in_env, r.env_tier, int(r.amb_rejected),
+            f"{dts[0]*1000:.1f}", f"{dts[1]*1000:.1f}",
+            f"{dts[2]*1000:.1f}", f"{dts[3]*1000:.1f}",
+            "|".join(str(i) for i in r.visible_ids),
+        ] + tre_vals + self._jitter_csv())
+        self._csv_file.flush()
+
+    def _fit_window_to_frame(self, fw, fh):
+        """Once, on the first frame: make the video area the same shape as the
+        camera frame, so it fills the window with no black bars."""
+        self._fitted = True
+        if self.isFullScreen() or self.isMaximized():
+            return
+        avail = self.screen().availableGeometry()
+        vh = self.stage.height()
+        vw = round(vh * fw / fh)
+        total_w = self.rail.width() + vw
+        if total_w > avail.width():                   # small screen: fit the width instead
+            total_w = avail.width()
+            vw = total_w - self.rail.width()
+            vh = round(vw * fh / fw)
+        # keep the window tall enough for the rail's axial view (the camera view may get thin
+        # bars in plain mode; the zoom view always fills the area)
+        vh = max(vh, int(total_w / WINDOW_MIN_ASPECT))
+        vh = min(vh, avail.height() - 90)               # leave room for the title bar and dock
+        self.resize(total_w, vh)
 
     def _show_frame(self, frame_bgr):
         """Convert BGR numpy frame to QPixmap and set on the video label."""
         h, w, _ = frame_bgr.shape
+        if not self._fitted:
+            self._fit_window_to_frame(w, h)
+        if abs(h / w - self._frame_aspect) > 1e-6:
+            self._frame_aspect = h / w
+            self._layout_views()
         # BGR -> RGB for Qt
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
-        # Scale to fill the label preserving aspect
-        pix = pix.scaled(self.video_label.size(),
-                         Qt.KeepAspectRatioByExpanding,
+        # Fit the whole frame inside the label (nothing cropped)
+        pix = pix.scaled(self.video_label.contentsRect().size(),
+                         Qt.KeepAspectRatio,
                          Qt.FastTransformation)
         self.video_label.setPixmap(pix)
 
@@ -911,80 +1319,88 @@ class ARWindow(QMainWindow):
     def keyPressEvent(self, event: QKeyEvent):
         k = event.key()
         text = event.text().lower()
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
+        sel = self.selection
         if text == "q":
             self.close()
         elif k == Qt.Key_Escape:
-            # Toggle shortcuts panel
-            self._show_shortcuts = not self._show_shortcuts
-            self.shortcuts_panel.setVisible(self._show_shortcuts)
-        elif text == "t":
-            self.show_traj = not self.show_traj
-        elif text == "e":
-            self.show_ellipses = not self.show_ellipses
-        elif text == "w":
-            self.show_wire = not self.show_wire
-        elif text in ("1", "2", "3", "4", "5"):
-            self._set_focus(int(text))
-        elif text in ("a", "0"):
-            self._set_focus(None)
-        elif k in (Qt.Key_Right, Qt.Key_Down) or text == "]":
-            self._step_focus(+1)
-        elif k in (Qt.Key_Left, Qt.Key_Up) or text == "[":
-            self._step_focus(-1)
-        elif text == "d":
-            self.detach = not self.detach
-        elif text == "g":
-            self._show_triad = not self._show_triad
-            self.axis_triad.setVisible(self._show_triad)
-        elif text == "x":
-            self._show_radar = not self._show_radar
-            self.target_radar.setVisible(self._show_radar)
-        elif text == "h":
-            # Toggle all HUD panels
-            for widget in [self.status_panel, self.pose_panel, self.tre_panel,
-                           self.state_pill]:
-                widget.setVisible(not widget.isVisible())
-        elif text == "f":
-            if self.isFullScreen():
-                self.showNormal()
+            if self.help.isVisible():
+                self._toggle_help()
+            elif self.check is not None:
+                self.check = None
+                self._toast = None
+                self._redraw_cached()
+        elif text in ("h", "?"):
+            self._toggle_help()
+        elif k == Qt.Key_P and shift:
+            if self.engineer:
+                self.tracker.print_residuals = True      # debug, one-shot
             else:
-                self.showFullScreen()
-        elif text == "c" and self.state == "VERIFYING":
-            self.state = "NAVIGATING"
-            print("Registration confirmed (manual).")
-        elif text == "r":
-            self.state = "SEARCHING"
-            self.prev_rvec = self.prev_tvec = None
-        elif text == "s":
+                print("Shift+P: turn on debug mode (M) first")
+        # ---- selection: level, side, overview ----
+        elif k in (Qt.Key_W, Qt.Key_Up):
+            self._select(sel.step_level, -1)
+        elif k in (Qt.Key_S, Qt.Key_Down):
+            self._select(sel.step_level, +1)
+        elif k in (Qt.Key_A, Qt.Key_Left):
+            self._select(sel.set_side, "L")
+        elif k in (Qt.Key_D, Qt.Key_Right):
+            self._select(sel.set_side, "R")
+        elif text in ("1", "2", "3", "4", "5"):
+            self._select(sel.select, int(text))
+        elif text == "]":
+            self._select(sel.step_pedicle, +1)
+        elif text == "[":
+            self._select(sel.step_pedicle, -1)
+        elif text in ("t", "0"):
+            self._select(sel.overview)
+        # ---- view and tools ----
+        elif text == "y":
+            self._toggle_option("outline")
+        elif text == "e":
+            self._toggle_option("circle")
+        elif text == "z":
+            self._toggle_view("zoom")
+        elif text == "x":
+            self._toggle_view("axial")
+        elif text == "l":
+            self._toggle_view("sagittal")
+        elif text == "v":
+            self._toggle_layout()
+        elif text in ("+", "="):
+            self._step_zoom(+1)
+        elif text in ("-", "_"):
+            self._step_zoom(-1)
+        elif text == "f":
+            self._toggle_fullscreen()
+        elif text == "p":
             self._save_screenshot()
+        elif text == "m":
+            self._toggle_engineer()
+        # ---- registration and logging ----
+        elif text == "c":
+            self.tracker.confirm()
+        elif text == "r":
+            self.tracker.reset()
         elif text == "n":
             self._step += 1
             print(f"--- step {self._step} ---")
-        elif text == "p":
-            self._print_residuals = True
+        elif text in (",", ".") and isinstance(self.grabber.cap, ReplayCapture):
+            print("Replay:", self.grabber.cap.step(-1 if text == "," else +1))
 
-    def _set_focus(self, level):
-        """Focus one vertebra level (1-5), or None for all levels."""
-        if level is not None and level not in self.level_idx:
-            print(f"No targets for L{level}")
-            return
-        self.focus_level = level
-        print("Focus:", "all levels" if level is None else f"L{level}")
+    def _select(self, change, *args):
+        """Run a Selection change (step_level, set_side, ...) and report it."""
+        was_overview = self.selection.is_overview
+        if change(*args):
+            print("Selected:", self.selection.name)
+            self.check = None
+            if AUTO_ZOOM and was_overview and not self.selection.is_overview and not self.views["zoom"]:
+                self._toggle_view("zoom")                 # first pedicle pick opens the zoom view (only Z / Reset close it)
 
-    def _step_focus(self, delta):
-        levels = sorted(self.level_idx)
-        if not levels:
-            return
-        if self.focus_level is None:
-            self._set_focus(levels[0] if delta > 0 else levels[-1])
-        else:
-            k = levels.index(self.focus_level) + delta
-            self._set_focus(levels[k] if 0 <= k < len(levels) else None)
-
-    def _save_screenshot(self):
-        """Save raw frame (with on-frame overlays) and full window (with HUD)."""
+    def _save_screenshot(self, quiet=False):
+        """Save raw frame (with on-frame overlays) and full window (with HUD). Returns the file stem."""
         if self._last_frame_bgr is None:
-            return
+            return None
         self._screenshot_count += 1
         stamp = time.strftime("%Y%m%d_%H%M%S")
         base = self._screenshot_dir / f"shot_{stamp}_{self._screenshot_count:03d}"
@@ -1006,16 +1422,23 @@ class ARWindow(QMainWindow):
                 json.dump(pose, f, indent=2)
         else:
             print("  (no valid pose, measurement data not saved)")
+        if self.scene is not None:
+            with open(f"{base}_scene.json", "w") as f:
+                f.write(scene_to_json(self.scene, indent=1))
         self.grab().save(f"{base}_window.png")
-        print(f"Screenshot saved: {base}_*.png")
+        if not quiet:
+            print(f"Screenshot saved: {base}_*.png")
         if self._csv_writer is not None:
             self._csv_writer.writerow([f"{time.time():.3f}", self._step,
                                        "SCREENSHOT", base.name])
             self._csv_file.flush()
+        return base.name
 
     def closeEvent(self, event):
         self.timer.stop()
         self.grabber.release()
+        if self._scene_file is not None:
+            self._scene_file.close()
         if self._csv_file is not None:
             self._csv_file.close()
             print(f"Log closed: {self.args.log}")
@@ -1054,13 +1477,15 @@ def main():
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])
     ap.add_argument("--log", default=None,
                     help="CSV file path for per-frame data logging (ATP tests)")
+    ap.add_argument("--scene-log", default=None,
+                    help="JSON lines file: one scene (ar_scene.py) per frame, for the phone build and replay tests")
     ap.add_argument("--screenshot-dir", default="data/screenshots",
                     help="Directory for screenshots (press 's' to capture)")
     args = ap.parse_args()
 
     # HiDPI is on by default in Qt6, no explicit attributes needed.
     app = QApplication(sys.argv)
-    app.setStyleSheet(QSS)
+    app.setStyleSheet(QSS + RAIL_QSS)
 
     window = ARWindow(args)
     window.show()

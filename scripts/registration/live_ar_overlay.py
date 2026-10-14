@@ -35,12 +35,12 @@ from ar_board import (
 )
 from ar_tre import compute_tre_scalar, DEFAULT_FLE_MM
 from ar_targets import load_targets
-from ar_overlay import (
+from ui.overlay import (
     TextRenderer, draw_targets, draw_trajectories,
     draw_wireframe, draw_hud, draw_axis_triad, draw_target_radar,
     is_in_envelope,
 )
-from ar_stl import load_stl_for_wireframe
+from ui.stl import load_stl_for_wireframe
 
 
 STALE_HOLD_SEC = 0.3

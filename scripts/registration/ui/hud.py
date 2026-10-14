@@ -9,7 +9,7 @@ StatePill, ShortcutsPanel, AxisTriad, TargetRadar to follow after
 we verify this renders correctly on your Mac.
 """
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QFrame, QLabel, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
@@ -234,6 +234,62 @@ class PosePanel(HudPanel):
             self._last["zone"] = (z_str, e_status)
 
 
+class ErrorPanel(HudPanel):
+    """Predicted TRE and the calibrated 95 % error at the shown entry point (selected, or worst in overview)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
+        row, self._target_val = _row("Target", "--")
+        layout.addWidget(row)
+        row, self._tre_val = _row("Pred. TRE", "--")
+        layout.addWidget(row)
+        row, self._r95_val = _row("Expected 95%", "--")
+        layout.addWidget(row)
+        self.setMinimumSize(240, 110)
+
+    def update_values(self, label, tre_mm, r95_mm):
+        if label is None:
+            self._target_val.setText("--")
+            self._tre_val.setText("--")
+            self._r95_val.setText("--")
+            return
+        self._target_val.setText(str(label))
+        self._tre_val.setText("--" if tre_mm is None else f"{tre_mm:.2f} mm")
+        self._r95_val.setText("--" if r95_mm is None else f"{r95_mm:.1f} mm")
+
+
+class JitterPanel(HudPanel):
+    """Frame to frame wobble of the overlay at the selected entry point, in mm (see ar_jitter.py)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
+        row, self._jit_val = _row("Jitter", "--")
+        layout.addWidget(row)
+        row, self._depth_val = _row("Depth", "--")
+        layout.addWidget(row)
+        row, self._n_val = _row("Window", "--")
+        layout.addWidget(row)
+        self.setMinimumSize(240, 110)
+
+    def update_values(self, jitter):
+        """jitter: (total_mm, depth_mm, n_poses) or None."""
+        if jitter is None:
+            self._jit_val.setText("--")
+            self._depth_val.setText("--")
+            self._n_val.setText("--")
+            return
+        total, depth, n = jitter
+        self._jit_val.setText(f"{total:.2f} mm")
+        self._depth_val.setText(f"{depth:.2f} mm")
+        self._n_val.setText(f"{n} frames")
+
+
 # ====================================================================
 # TRE panel (bottom-left)
 # ====================================================================
@@ -251,7 +307,7 @@ class TrePanel(HudPanel):
         layout.setSpacing(8)
 
         tgt_row, self._tgt_val = _row("Target", "--")
-        tre_row, self._tre_val = _row("TRE", "--")
+        tre_row, self._tre_val = _row("Error (95%)", "--")
 
         # Legend row
         legend = QWidget()
@@ -260,9 +316,11 @@ class TrePanel(HudPanel):
         legend_layout.setContentsMargins(0, 4, 0, 0)
         legend_layout.setSpacing(16)
 
-        for colour_hex, text in [("#64D28C", "< 1.0mm"),
-                                 ("#EBB450", "1.0-2.0mm"),
-                                 ("#D75A5A", "> 2.0mm")]:
+        for colour_hex, text in [
+                ("#64D28C", "≤ 3.0 mm"), 
+                ("#EBB450", "3.0-4.0 mm"), 
+                ("#D75A5A", "> 4.0 mm")
+            ]:
             item = QWidget()
             item.setAttribute(Qt.WA_TranslucentBackground, True)
             il = QHBoxLayout(item)
@@ -325,6 +383,18 @@ class TrePanel(HudPanel):
             self._tre_val.setText(tre_str)
             self._set_status(self._tre_val, status)
             self._last["tre"] = (tre_str, status)
+
+    def update_error(self, label, r95_mm, status):
+        bl = label or "--"
+        text = f"±{r95_mm:.1f} mm" if r95_mm is not None else "--"
+        if self._last["tgt"] != (bl, status):
+            self._tgt_val.setText(bl)
+            self._set_status(self._tgt_val, status)
+            self._last["tgt"] = (bl, status)
+        if self._last["tre"] != (text, status):
+            self._tre_val.setText(text)
+            self._set_status(self._tre_val, status)
+            self._last["tre"] = (text, status)
 
 
 # ====================================================================
@@ -404,19 +474,18 @@ class ShortcutsPanel(QFrame):
     """
 
     SHORTCUTS = [
+        ("w / s", "level"), 
+        ("a / d", "side"), 
+        ("t", "all levels"),
+        ("y", "wireframe"),
+        ("e", "ellipses"),
+        ("p", "photo"),
         ("c", "confirm"),
         ("r", "reject"),
-        ("t", "trajectories"),
-        ("e", "ellipses"),
-        ("w", "wireframe"),
-        ("d", "detach"),
+        ("h", "toggle hud"),
         ("g", "axis gizmo"),
         ("x", "target radar"),
-        ("h", "toggle hud"),
         ("f", "fullscreen"),
-        ("s", "screenshot"),
-        ("n", "next step"),
-        ("p", "print marker residuals"),
         ("esc", "toggle help"),
         ("q", "quit"),
     ]
@@ -460,7 +529,7 @@ class AxisTriadWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(120, 120)
+        self.setFixedSize(132, 132)
         self._axes_cam = None
 
     def set_rvec(self, rvec):
@@ -484,13 +553,13 @@ class AxisTriadWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         cx, cy = self.width() // 2, self.height() // 2
-        size = min(cx, cy) - 12
+        radius = min(cx, cy) - 3
+        size = int(radius * 0.58)          # axis length: leaves room inside the circle for the labels
 
         # Low-opacity dark circle backdrop (draws even when axes aren't set)
         backdrop = QColor(16, 20, 22, 130)
         painter.setBrush(QBrush(backdrop))
         painter.setPen(QPen(QColor(60, 195, 195, 90), 1))
-        radius = size + 8
         painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
 
         if self._axes_cam is None:
@@ -522,9 +591,12 @@ class AxisTriadWidget(QWidget):
             # Label
             painter.setPen(col)
             painter.setFont(QFont("Helvetica Neue", 11, QFont.Bold))
-            label_x = ex + (6 if ex >= cx else -18)
-            label_y = ey - 8
-            painter.drawText(label_x, label_y, name)
+            # label sits just beyond the tip, along the axis direction, so it never lies on a line
+            dx, dy = ex - cx, ey - cy
+            n = (dx * dx + dy * dy) ** 0.5
+            ux, uy = (dx / n, dy / n) if n > 4 else (0.0, -1.0)
+            lx, ly = ex + ux * 15, ey + uy * 15
+            painter.drawText(QRectF(lx - 10, ly - 10, 20, 20), Qt.AlignCenter, name)
 
 
 # ====================================================================

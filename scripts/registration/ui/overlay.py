@@ -145,7 +145,7 @@ def draw_crosshair(frame, cx, cy, sz=5, col=TEXT_PRIMARY, outline=True,
 
 def draw_targets(frame, targets_mm, labels, tre_vals, rvec, tvec,
                  K, D, vis_ids, corner_lut, fle, in_env, tr,
-                 show_ell=True, doff=0, marker_col=None):
+                 show_ell=True, doff=0, marker_col=None, colours=None):
     """
     marker_col: if given (BGR), the crosshair / dot itself is drawn in this colour
     (with a contrasting outline); ellipses and labels keep the TRE status colour.
@@ -155,7 +155,7 @@ def draw_targets(frame, targets_mm, labels, tre_vals, rvec, tvec,
     sz = max(4, int(tr.h * 0.007))
 
     for i, (pt, lbl, tre) in enumerate(zip(pts, labels, tre_vals)):
-        col = tre_colour(tre, in_env)
+        col = colours[i] if colours is not None else tre_colour(tre, in_env)
         cx, cy = pt[0], pt[1] - doff
         mcol = marker_col if marker_col is not None else col
         rim = (255, 255, 255) if sum(mcol) < 300 else (0, 0, 0)   # contrast outline
