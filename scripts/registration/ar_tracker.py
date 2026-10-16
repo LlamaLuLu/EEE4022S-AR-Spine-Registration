@@ -15,7 +15,7 @@ from ar_tre import compute_tre_scalar
 from ar_theme import envelope_tier
 
 STALE_HOLD_SEC = 0.3
-VERIFY_COUNTDOWN_SEC = 2.0
+VERIFY_COUNTDOWN_SEC = 1.0
 
 
 @dataclass
