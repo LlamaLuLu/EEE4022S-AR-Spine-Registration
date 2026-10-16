@@ -59,6 +59,7 @@ from ar_tracker import Tracker, VERIFY_COUNTDOWN_SEC
 from ar_jitter import JitterMonitor
 from ar_check import entry_check
 from ar_scene import build_scene, error_summary, scene_to_json
+from ar_boards import BoardSelector, load_boards, default_map_paths
 from ar_selection import Selection, parse_label, SIDE_NAMES
 from ar_error import (ANCHORS, error_radius95, grade, grade_colour,
                       draw_error_circle)
@@ -324,14 +325,13 @@ class ARWindow(QMainWindow):
         self.K = calib["camera_matrix"]
         self.D = calib["dist_coeffs"]
 
-        # --- Board geometry ---
-        self.corner_lut = load_corner_lut(args.marker_map)
-        self.n_total = len(self.corner_lut)
-        print(f"Board: {self.corner_lut.source or 'default V3'} | "
-              f"IDs {sorted(self.corner_lut)}, gate {self.corner_lut.min_markers}, "
-              f"{self.corner_lut.marker_size_mm:g} mm")
-
-        self.is_v3 = set(self.corner_lut) <= set(range(8))
+        # --- Board geometry: one or both boards, auto picks from the visible markers ---
+        self.selector = BoardSelector(
+            load_boards(args.marker_map or default_map_paths(_REPO)), args.board)
+        for b in self.selector.boards.values():
+            print(f"Board {b.name}: {b.lut.source or 'default V3'} | IDs {sorted(b.lut)}, "
+                  f"gate {b.gate}, {b.lut.marker_size_mm:g} mm")
+        print(f"Board mode: {self.selector.mode}")
         
         # --- Targets ---
         self.target_pts, self.target_labels, self.traj_pairs = load_targets(
@@ -343,8 +343,6 @@ class ARWindow(QMainWindow):
         # Which pedicle is selected (single source of truth for keys, rail, clicks)
         self.selection = Selection(self.target_labels)
         self.entry_idx = np.array(self.selection.all_entry_idx, dtype=int)
-        # Validated error anchor for this board (see ar_error.py)
-        self.anchor = ANCHORS["bracket" if self.is_v3 else "dome"]
 
         # --- Per-vertebra meshes (UI v2) ---
         self.vertebrae = None
@@ -446,8 +444,7 @@ class ARWindow(QMainWindow):
         )
 
         # --- Tracking (detection, PnP, state machine, TRE) ---
-        self.tracker = Tracker(self.detector, self.corner_lut, self.K, self.D,
-                               self.target_pts, args.fle, self.is_v3)
+        self.tracker = Tracker(self.detector, self.selector, self.K, self.D, self.target_pts, args.fle)
         self.show_ellipses = self.show_wire = True
         self.zoom_idx = ZOOM_DEFAULT
         self._wheel_acc = 0
@@ -484,7 +481,7 @@ class ARWindow(QMainWindow):
                 "cam_x", "cam_y", "cam_z", "in_envelope", "env_tier",
                 "amb_rejected", "grab_ms", "detect_pnp_ms", "overlay_ms", "qt_ms",
                 "visible_ids",
-            ] + tre_headers + ["jitter_mm", "jitter_depth_mm", "jitter_n"])
+            ] + tre_headers + ["jitter_mm", "jitter_depth_mm", "jitter_n", "board"])
             print(f"Logging to: {args.log}")
 
         # --- Screenshot ---
@@ -508,6 +505,26 @@ class ARWindow(QMainWindow):
     @property
     def state(self):
         return self.tracker.state
+
+    @property
+    def board(self):
+        return self.selector.board
+
+    @property
+    def corner_lut(self):
+        return self.selector.board.lut
+
+    @property
+    def n_total(self):
+        return self.selector.board.n_total
+
+    @property
+    def is_v3(self):
+        return self.selector.board.is_v3
+
+    @property
+    def anchor(self):
+        return self.selector.board.anchor
 
     def _build_ui(self):
         """Docked left rail + video. Overlays (triad, hint bar, help) sit on the video."""
@@ -734,6 +751,22 @@ class ARWindow(QMainWindow):
     def _say(self, text, secs=8.0):
         self._toast = (text, time.time() + secs)
 
+    def _board_changed(self, text):
+        self.jitter.reset()
+        self._jitter_val = None
+        self.check = None
+        self._say(text + ". Re-registering.", 4.0)
+
+    def _cycle_board(self):
+        sel = self.selector
+        if len(sel.modes) < 2:
+            self._say("Only one board loaded", 3.0)
+        elif sel.cycle_mode():
+            self.tracker.reset()
+            self._board_changed(f"Board: {sel.label}")
+        else:
+            self._say(f"Board: {sel.label}", 3.0)
+
     def _do_check(self, cam_px, view):
         """The click marks the real entry dot. Back-project it onto the plane through the selected entry
         target (square to the camera) and measure the in-plane error, as the ATP-2 tool does."""
@@ -941,6 +974,8 @@ class ARWindow(QMainWindow):
 
         now = time.time()
         r = self.tracker.process(frame, now)          # tracking: no drawing
+        if r.board_switched:
+            self._board_changed(f"Board: {self.selector.label}")
         self._update_jitter(r)
 
         t2 = time.perf_counter()
@@ -1168,7 +1203,7 @@ class ARWindow(QMainWindow):
         rail = self.rail
         rail.state_pill.set_state(r.state, r.verify_remaining)
         self.scene = sc = build_scene(r, self.selection, self.target_pts, self.target_labels,
-                                      self.anchor, self.is_v3, self.n_total, self._jitter_val)
+                                      self.anchor, self.is_v3, self.n_total, self._jitter_val, board=self.board.name)
         t = sc["trust"]
         rail.trust.update_state(t["status"], t["title"], t["reason"])
         rail.selector.set_state(self.selection.level, self.selection.side)
@@ -1189,6 +1224,7 @@ class ARWindow(QMainWindow):
                                    f"Expected error at the entry point. 95% of the time within this. {extra}")
 
         if self.engineer:
+            rail.status_panel.set_board(self.selector.label, self.n_total, self.board.gate)
             rail.status_panel.update_values(r.n_markers, r.pnp_ok, r.reproj_rms)
             rail.pose_panel.update_values(r.distance_mm, r.elev_deg, r.az_deg, r.env_tier)
             err = sc["error"]
@@ -1240,6 +1276,7 @@ class ARWindow(QMainWindow):
             "rvec": np.asarray(r.rvec).ravel().tolist(),
             "tvec": np.asarray(r.tvec).ravel().tolist(),
             "state": r.state,
+            "board": r.board,
             "pnp_ok": bool(r.pnp_ok),
             "n_markers": int(r.n_markers),
             "rms_px": None if np.isnan(r.reproj_rms) else float(r.reproj_rms),
@@ -1271,7 +1308,7 @@ class ARWindow(QMainWindow):
             f"{dts[0]*1000:.1f}", f"{dts[1]*1000:.1f}",
             f"{dts[2]*1000:.1f}", f"{dts[3]*1000:.1f}",
             "|".join(str(i) for i in r.visible_ids),
-        ] + tre_vals + self._jitter_csv())
+        ] + tre_vals + self._jitter_csv() + [r.board])
         self._csv_file.flush()
 
     def _fit_window_to_frame(self, fw, fh):
@@ -1382,6 +1419,8 @@ class ARWindow(QMainWindow):
             self.tracker.confirm()
         elif text == "r":
             self.tracker.reset()
+        elif text == "b":
+            self._cycle_board()
         elif text == "n":
             self._step += 1
             print(f"--- step {self._step} ---")
@@ -1472,7 +1511,10 @@ def main():
                          "level focus (default: phantom/meshes/v3_overlay). "
                          "Use 'none' to skip and use the combined --stl.")
     ap.add_argument("--vertebrae-prefix", default="phantom_l")
-    ap.add_argument("--marker-map", default=None)
+    ap.add_argument("--marker-map", action="append", default=None,
+                    help="marker map JSON; repeat for several boards (default: dome and bracket from data/)")
+    ap.add_argument("--board", choices=["auto", "dome", "bracket"], default="auto",
+                    help="auto picks from the visible markers; B cycles at runtime")
     ap.add_argument("--fle", type=float, default=DEFAULT_FLE_MM)
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])
     ap.add_argument("--log", default=None,

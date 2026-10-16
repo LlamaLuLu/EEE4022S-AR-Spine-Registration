@@ -114,10 +114,12 @@ class StatusPanel(HudPanel):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(8)
 
-        markers_row, self._markers_val = _row("Markers", f"0/{n_total}")
         pnp_row, self._pnp_val = _row("PnP", "--")
         rms_row, self._rms_val = _row("RMS", "--")
+        board_row, self._board_val = _row("Board", "--")
+        markers_row, self._markers_val = _row("Markers", f"0/{n_total}")
 
+        layout.addWidget(board_row)
         layout.addWidget(markers_row)
         layout.addWidget(pnp_row)
         layout.addWidget(rms_row)
@@ -128,10 +130,10 @@ class StatusPanel(HudPanel):
         # _apply_shadow(self)
 
         # Explicit size so the panel is visible even before content updates
-        self.setMinimumSize(240, 120)
+        self.setMinimumSize(240, 150)
 
         # Cache last values to skip unnecessary setText calls
-        self._last = {"markers": None, "pnp": None, "rms": None}
+        self._last = {"markers": None, "pnp": None, "rms": None, "board": None}
 
     def _set_status(self, label, status):
         """Set the QSS status property on a value label."""
@@ -168,6 +170,14 @@ class StatusPanel(HudPanel):
             self._set_status(self._rms_val, r_status)
             self._last["rms"] = r_str
 
+    def set_board(self, label, n_total, gate):
+        key = (label, n_total, gate)
+        if self._last["board"] == key:
+            return
+        self._last["board"] = key
+        self.n_total, self.gate = n_total, gate
+        self._board_val.setText(label)
+        self._last["markers"] = None     # redraw "n/N" with the new total
 
 # ====================================================================
 # Pose panel (top-right)

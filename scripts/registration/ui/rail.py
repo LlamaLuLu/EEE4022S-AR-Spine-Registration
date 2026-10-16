@@ -319,7 +319,8 @@ HELP_ROWS = [
                         ("Esc", "clear the mark")]),
     ("Registration", [("C", "confirm"),
                       ("R", "reject and re-check")]),
-    ("Other", [("M", "debug mode"),
+    ("Other", [("B", "marker board: auto, dome, bracket"),
+               ("M", "debug mode"),
                ("H or ?", "this help"),
                ("Q", "quit")]),
 ]

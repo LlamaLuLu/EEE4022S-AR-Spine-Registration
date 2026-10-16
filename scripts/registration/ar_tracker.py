@@ -40,16 +40,17 @@ class FrameResult:
     tre_values: object = None
     visible_ids: list = field(default_factory=list)
     verify_remaining: float = 0.0   # seconds left in the VERIFYING countdown
+    board: str = ""                 # which board this frame was solved against
+    board_switched: bool = False    # auto mode changed board on this frame
 
 
 class Tracker:
-    def __init__(self, detector, corner_lut, K, D, target_pts, fle, is_v3):
+    def __init__(self, detector, selector, K, D, target_pts, fle):
         self.detector = detector
-        self.corner_lut = corner_lut
+        self.selector = selector
         self.K, self.D = K, D
         self.target_pts = target_pts
         self.fle = fle
-        self.is_v3 = is_v3
 
         self.state = "SEARCHING"
         self.prev_rvec = self.prev_tvec = None
@@ -57,6 +58,18 @@ class Tracker:
         self._pre_stale_state = None    # state to resume after a brief dropout
         self.print_residuals = False    # one-shot debug print (engineer mode)
 
+    @property
+    def board(self):
+        return self.selector.board
+
+    @property
+    def corner_lut(self):
+        return self.selector.board.lut
+
+    @property
+    def is_v3(self):
+        return self.selector.board.is_v3
+    
     # ---- commands from the UI ----
     def confirm(self):
         if self.state == "VERIFYING":
@@ -71,6 +84,9 @@ class Tracker:
     def process(self, frame, now):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
+        switched = self.selector.update(ids)
+        if switched:
+            self.reset()            # the old pose belongs to the other board
 
         pnp_ok = False
         n_markers = 0
@@ -174,5 +190,5 @@ class Tracker:
             distance_mm=distance_mm, elev_deg=elev_deg, az_deg=az_deg,
             env_tier=env_tier, in_env=in_env, amb_rejected=amb_rejected,
             tre_values=tre_values, visible_ids=visible_ids,
-            verify_remaining=remaining,
+            verify_remaining=remaining, board=self.board.name, board_switched=switched,
         )

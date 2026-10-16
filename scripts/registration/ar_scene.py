@@ -51,7 +51,7 @@ def error_summary(r, selection, anchor):
     return j, float(r95[j]), grade(r95[j], r.env_tier)
 
 
-def build_scene(r, selection, target_pts, target_labels, anchor, is_v3, n_total, jitter=None):
+def build_scene(r, selection, target_pts, target_labels, anchor, is_v3, n_total, jitter=None, board=None):
     """r: a FrameResult. jitter: (total_mm, depth_mm, n_poses) or None."""
     status, title, reason = trust_badge(r, is_v3, n_total)
     tre = None if r.tre_values is None else np.asarray(r.tre_values, float)
@@ -81,6 +81,7 @@ def build_scene(r, selection, target_pts, target_labels, anchor, is_v3, n_total,
         "trust": {"status": status, "title": title, "reason": reason},
         "pose": None if r.rvec is None else {"rvec": _vec(r.rvec), "tvec": _vec(r.tvec, 3)},
         "quality": {
+            "board": board,
             "pnp_ok": bool(r.pnp_ok), "n_markers": int(r.n_markers),
             "n_total": int(n_total),
             "visible_ids": [int(i) for i in r.visible_ids],
