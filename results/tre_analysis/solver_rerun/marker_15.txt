@@ -1,0 +1,34 @@
+56-pose sweep at 600 mm (elevations [10, 20, 30, 40, 50, 60, 70], azimuth step 45.0 deg), 15 mm markers, entry targets (10), gate 5 markers, solver sqpnp, visibility 76 deg / 13 px / margin 10
+noise: static 0.121 px and live 0.91 px per axis; 400 trials per pose
+
+variant              N  poses ok  MC static  MC live  overlay live  Fitzpatrick   (mean TRE over successful poses, mm)
+V3_8marker           8      5/56      0.123    0.924         0.396        0.880
+D1_left_L3           7     34/56      0.174    1.314         0.402        0.962
+D2_caudal            7     32/56      0.176    1.332         0.485        1.227
+D3_split_full       10     32/56      0.095    0.717         0.157        0.379
+D4_split_half       10     37/56      0.085    0.645         0.166        0.402
+D5_split_half_min    8     32/56      0.085    0.638         0.137        0.356
+D6_split_half_low   10     22/56      0.144    1.082         0.436        0.926
+D1_final             7     32/56      0.143    1.083         0.394        0.928
+
+Poses tracked (out of 56) as a function of the minimum-marker gate (hard limits | expected value, soft model):
+variant               gate 2   gate 3   gate 4   gate 5   gate 6   |   gate 2   gate 3   gate 4   gate 5   gate 6
+V3_8marker                25       25       25        5        5   |     25.9     21.3     14.7      4.2      3.5
+D1_left_L3                39       37       35       34       32   |     40.7     37.7     34.7     30.7     25.1
+D2_caudal                 40       37       34       32       32   |     40.1     36.7     33.7     30.0     24.7
+D3_split_full             40       38       37       32       32   |     41.6     39.1     36.8     33.3     28.7
+D4_split_half             42       40       40       37       32   |     42.8     40.2     38.7     36.6     33.7
+D5_split_half_min         40       38       37       32       32   |     41.4     39.0     36.7     33.3     28.9
+D6_split_half_low         44       33       26       22        6   |     42.8     32.1     23.8     14.6      4.2
+D1_final                  38       37       35       32       30   |     39.6     36.7     33.7     29.9     24.5
+
+Where each variant tracks (gate 5): non-coplanar marker set vs a single plane, and poses whose worst target is predicted under 2 mm
+  V3_8marker          non-coplanar   5, coplanar   0  |  worst < 2 mm:   5  |  tracked at elevation >= 60: 0/16
+  D1_left_L3          non-coplanar  34, coplanar   0  |  worst < 2 mm:  34  |  tracked at elevation >= 60: 16/16
+  D2_caudal           non-coplanar  32, coplanar   0  |  worst < 2 mm:  31  |  tracked at elevation >= 60: 16/16
+  D3_split_full       non-coplanar  32, coplanar   0  |  worst < 2 mm:  32  |  tracked at elevation >= 60: 16/16
+  D4_split_half       non-coplanar  37, coplanar   0  |  worst < 2 mm:  35  |  tracked at elevation >= 60: 16/16
+  D5_split_half_min   non-coplanar  32, coplanar   0  |  worst < 2 mm:  32  |  tracked at elevation >= 60: 16/16
+  D6_split_half_low   non-coplanar  15, coplanar   7  |  worst < 2 mm:  13  |  tracked at elevation >= 60: 9/16
+  D1_final            non-coplanar  32, coplanar   0  |  worst < 2 mm:  32  |  tracked at elevation >= 60: 16/16
+Saved results/tre_analysis/solver_rerun/marker_15.csv

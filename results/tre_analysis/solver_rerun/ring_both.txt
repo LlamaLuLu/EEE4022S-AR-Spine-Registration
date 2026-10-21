@@ -1,0 +1,38 @@
+== ITERATIVE ==
+D1_left_L3      r=25  tracked 37/56  non-copl 37  MC live  1.772  MC worst  1.902  Fitz worst 1.825
+D1_left_L3      r=30  tracked 37/56  non-copl 37  MC live  1.580  MC worst  1.703  Fitz worst 1.562
+D1_left_L3      r=40  tracked 37/56  non-copl 37  MC live  1.297  MC worst  1.407  Fitz worst 1.231
+D1_left_L3      r=50  tracked 37/56  non-copl 37  MC live  1.084  MC worst  1.180  Fitz worst 1.014
+D1_left_L3      r=60  tracked 37/56  non-copl 37  MC live  0.926  MC worst  1.010  Fitz worst 0.868
+
+D2_caudal       r=25  tracked 37/56  non-copl 37  MC live  1.824  MC worst  2.021  Fitz worst 2.589
+D2_caudal       r=30  tracked 37/56  non-copl 37  MC live  1.644  MC worst  1.826  Fitz worst 2.223
+D2_caudal       r=40  tracked 37/56  non-copl 37  MC live  1.368  MC worst  1.526  Fitz worst 1.739
+D2_caudal       r=50  tracked 36/56  non-copl 36  MC live  1.240  MC worst  1.393  Fitz worst 1.530
+D2_caudal       r=60  tracked 34/56  non-copl 34  MC live  1.159  MC worst  1.320  Fitz worst 1.472
+
+D4_split_half   r=25  tracked 39/56  non-copl 39  MC live  0.884  MC worst  1.017  Fitz worst 0.674
+D4_split_half   r=30  tracked 40/56  non-copl 40  MC live  0.817  MC worst  0.937  Fitz worst 0.620
+D4_split_half   r=40  tracked 40/56  non-copl 40  MC live  0.604  MC worst  0.686  Fitz worst 0.406
+D4_split_half   r=50  tracked 40/56  non-copl 40  MC live  0.527  MC worst  0.598  Fitz worst 0.415
+D4_split_half   r=60  tracked 40/56  non-copl 40  MC live  0.462  MC worst  0.521  Fitz worst 0.392
+
+== SQPNP ==
+D1_left_L3      r=25  tracked 37/56  non-copl 37  MC live  1.789  MC worst  1.919  Fitz worst 1.825
+D1_left_L3      r=30  tracked 37/56  non-copl 37  MC live  1.592  MC worst  1.714  Fitz worst 1.562
+D1_left_L3      r=40  tracked 37/56  non-copl 37  MC live  1.303  MC worst  1.413  Fitz worst 1.231
+D1_left_L3      r=50  tracked 37/56  non-copl 37  MC live  1.088  MC worst  1.184  Fitz worst 1.014
+D1_left_L3      r=60  tracked 37/56  non-copl 37  MC live  0.929  MC worst  1.014  Fitz worst 0.868
+
+D2_caudal       r=25  tracked 37/56  non-copl 37  MC live  1.851  MC worst  2.046  Fitz worst 2.589
+D2_caudal       r=30  tracked 37/56  non-copl 37  MC live  1.663  MC worst  1.844  Fitz worst 2.223
+D2_caudal       r=40  tracked 37/56  non-copl 37  MC live  1.378  MC worst  1.535  Fitz worst 1.739
+D2_caudal       r=50  tracked 36/56  non-copl 36  MC live  1.244  MC worst  1.395  Fitz worst 1.530
+D2_caudal       r=60  tracked 34/56  non-copl 34  MC live  1.168  MC worst  1.330  Fitz worst 1.472
+
+D4_split_half   r=25  tracked 39/56  non-copl 39  MC live  0.896  MC worst  1.030  Fitz worst 0.674
+D4_split_half   r=30  tracked 40/56  non-copl 40  MC live  0.827  MC worst  0.948  Fitz worst 0.620
+D4_split_half   r=40  tracked 40/56  non-copl 40  MC live  0.613  MC worst  0.696  Fitz worst 0.406
+D4_split_half   r=50  tracked 40/56  non-copl 40  MC live  0.534  MC worst  0.607  Fitz worst 0.415
+D4_split_half   r=60  tracked 40/56  non-copl 40  MC live  0.469  MC worst  0.529  Fitz worst 0.392
+

@@ -1,0 +1,13 @@
+56-pose sweep at 900 mm (elevations [10, 20, 30, 40, 50, 60, 70], azimuth step 45.0 deg), 20 mm markers, entry targets (10), gate 5 markers, solver sqpnp, visibility 76 deg / 13 px / margin 10
+noise: static 0.121 px and live 0.91 px per axis; 400 trials per pose
+
+variant              N  poses ok  MC static  MC live  overlay live  Fitzpatrick   (mean TRE over successful poses, mm)
+V3_8marker           8      4/56      0.264    1.992         0.619        0.845
+
+Poses tracked (out of 56) as a function of the minimum-marker gate (hard limits | expected value, soft model):
+variant               gate 2   gate 3   gate 4   gate 5   gate 6   |   gate 2   gate 3   gate 4   gate 5   gate 6
+V3_8marker                25       24       24        4        4   |     26.3     20.5     12.9      3.9      2.8
+
+Where each variant tracks (gate 5): non-coplanar marker set vs a single plane, and poses whose worst target is predicted under 2 mm
+  V3_8marker          non-coplanar   4, coplanar   0  |  worst < 2 mm:   4  |  tracked at elevation >= 60: 0/16
+Saved results/tre_analysis/solver_rerun/v3_900_sqpnp.csv

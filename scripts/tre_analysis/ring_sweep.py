@@ -27,8 +27,8 @@ def run(ori):
             f"Fitz worst {mv._m(ok, 'fitz_max'):.3f}")
 
 
-def ring_sweep():
-    mv.PNP_FLAG = cv2.SOLVEPNP_ITERATIVE
+def ring_sweep(flag=cv2.SOLVEPNP_SQPNP):
+    mv.SOLVER_FLAG = flag
     a.distance = 600
     for cfg in ("D1_left_L3", "D2_caudal", "D4_split_half"):
         for r in (25, 30, 40, 50, 60):
@@ -38,7 +38,7 @@ def ring_sweep():
 
 def toph_sweep():
     for flag, fname in ((cv2.SOLVEPNP_ITERATIVE, "ITERATIVE"), (cv2.SOLVEPNP_SQPNP, "SQPNP")):
-        mv.PNP_FLAG = flag
+        mv.SOLVER_FLAG = flag
         for d in (600, 900):
             a.distance = d
             for h in (0, 5, 10, 15, 20, 25, 30, 40):
@@ -48,4 +48,9 @@ def toph_sweep():
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "toph"
-    {"ring": ring_sweep, "toph": toph_sweep}[which]()
+    if which == "ring":
+        for flag, name in ((cv2.SOLVEPNP_ITERATIVE, "ITERATIVE"), (cv2.SOLVEPNP_SQPNP, "SQPNP")):
+            print(f"== {name} ==")
+            ring_sweep(flag)
+    else:
+        toph_sweep()

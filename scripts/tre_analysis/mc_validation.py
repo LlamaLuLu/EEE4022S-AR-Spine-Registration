@@ -70,6 +70,7 @@ except ImportError:
 IMG_W, IMG_H = 1920, 1080
 MARKER_MM = 20.0
 GATE = 4                      # live pipeline: MIN_MARKERS_PNP
+SOLVER_FLAG = cv2.SOLVEPNP_ITERATIVE
 FLE_FITZ_MM = 0.8             # Fitzpatrick input used in the pipeline
 
 
@@ -266,7 +267,7 @@ def simulate(oriented, ids, targets, pose, K, dist, sigma_px, n_trials=400, seed
     e3, ei, rms = [], [], []
     for _ in range(n_trials):
         noisy = (clean + rng.normal(0.0, sigma_px, clean.shape)).astype(np.float32)
-        ok, rv, tv = cv2.solvePnP(corners3d, noisy, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
+        ok, rv, tv = cv2.solvePnP(corners3d, noisy, K, dist, flags=SOLVER_FLAG)
         if not ok:
             continue
         Re, _ = cv2.Rodrigues(rv)
@@ -616,7 +617,7 @@ def cmd_design(a):
     poses = pose_grid(a)
     variants = select_variants(a)
     print(f"{len(poses)}-pose sweep at {a.distance:.0f} mm (elevations {a.elevs}, azimuth step {a.az_step} deg), "
-          f"{a.marker_mm:.0f} mm markers, entry targets ({len(targets)}), gate {a.gate} markers, "
+          f"{a.marker_mm:.0f} mm markers, entry targets ({len(targets)}), gate {a.gate} markers, solver {a.solver}, "
           f"visibility {vis.max_angle_deg:.0f} deg / {vis.min_width_px:.0f} px / margin {vis.margin_px:.0f}")
     print(f"noise: static {a.sigma_static} px and live {a.sigma_live} px per axis; {a.trials} trials per pose\n")
     res = {n: score_variant(ori, a, K, dist, targets, vis, sv, poses, a.marker_mm,
@@ -961,6 +962,7 @@ def cmd_fle(a):
 
 
 def main():
+    global SOLVER_FLAG
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["fit", "design", "tilt", "atp4", "atp2", "fle", "figs", "predict"])
     d = "data/atp/"
@@ -1006,11 +1008,13 @@ def main():
     ap.add_argument("--az-step", type=float, default=45.0, help="design/tilt: azimuth step (deg)")
     ap.add_argument("--variants", nargs="*", default=None,
                     help="design: only variants whose name contains one of these strings (e.g. V3 D)")
+    ap.add_argument("--solver", choices=["iterative", "sqpnp"], default="iterative")
     ap.add_argument("--configs", nargs="*", default=None, help="tilt: only these DOME_CONFIGS (substrings)")
     ap.add_argument("--tilts", type=float, nargs="+", default=[15, 20, 25, 30, 35, 40, 45], help="tilt: angles (deg)")
     ap.add_argument("--hands", choices=["none", "left", "right", "both"], default="none",
                     help="design: hand stand-in occlusion check for a surgeon on this side")
     a = ap.parse_args()
+    SOLVER_FLAG = getattr(cv2, "SOLVEPNP_" + a.solver.upper())
     resolve_variant(a)
     a.gate_cli = a.gate
     if a.gate is None:

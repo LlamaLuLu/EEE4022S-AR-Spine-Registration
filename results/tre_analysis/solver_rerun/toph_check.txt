@@ -1,0 +1,36 @@
+ITERATIVE 600 mm  top_h= 0  tracked 37/56  non-copl  0  MC live  1.962  MC worst  2.703  Fitz worst 1.162
+ITERATIVE 600 mm  top_h= 5  tracked 37/56  non-copl  0  MC live 56.942  MC worst 80.307  Fitz worst 1.162
+ITERATIVE 600 mm  top_h=10  tracked 37/56  non-copl 37  MC live 23.801  MC worst 32.514  Fitz worst 1.159
+ITERATIVE 600 mm  top_h=15  tracked 37/56  non-copl 37  MC live  1.975  MC worst  2.283  Fitz worst 1.154
+ITERATIVE 600 mm  top_h=20  tracked 37/56  non-copl 37  MC live  1.110  MC worst  1.206  Fitz worst 1.147
+ITERATIVE 600 mm  top_h=25  tracked 37/56  non-copl 37  MC live  1.084  MC worst  1.174  Fitz worst 1.139
+ITERATIVE 600 mm  top_h=30  tracked 37/56  non-copl 37  MC live  1.057  MC worst  1.140  Fitz worst 1.129
+ITERATIVE 600 mm  top_h=40  tracked 37/56  non-copl 37  MC live  1.003  MC worst  1.075  Fitz worst 1.105
+
+ITERATIVE 900 mm  top_h= 0  tracked 35/56  non-copl  0  MC live 336.446  MC worst 337.903  Fitz worst 1.241
+ITERATIVE 900 mm  top_h= 5  tracked 35/56  non-copl  0  MC live 83.082  MC worst 116.780  Fitz worst 1.240
+ITERATIVE 900 mm  top_h=10  tracked 35/56  non-copl 35  MC live 70.064  MC worst 98.969  Fitz worst 1.236
+ITERATIVE 900 mm  top_h=15  tracked 35/56  non-copl 35  MC live 17.874  MC worst 23.531  Fitz worst 1.229
+ITERATIVE 900 mm  top_h=20  tracked 35/56  non-copl 35  MC live  2.625  MC worst  2.785  Fitz worst 1.219
+ITERATIVE 900 mm  top_h=25  tracked 35/56  non-copl 35  MC live  2.566  MC worst  2.714  Fitz worst 1.207
+ITERATIVE 900 mm  top_h=30  tracked 35/56  non-copl 35  MC live  2.504  MC worst  2.640  Fitz worst 1.194
+ITERATIVE 900 mm  top_h=40  tracked 35/56  non-copl 35  MC live  2.377  MC worst  2.493  Fitz worst 1.163
+
+SQPNP     600 mm  top_h= 0  tracked 37/56  non-copl  0  MC live  1.194  MC worst  1.314  Fitz worst 1.162
+SQPNP     600 mm  top_h= 5  tracked 37/56  non-copl  0  MC live  1.184  MC worst  1.301  Fitz worst 1.162
+SQPNP     600 mm  top_h=10  tracked 37/56  non-copl 37  MC live  1.167  MC worst  1.278  Fitz worst 1.159
+SQPNP     600 mm  top_h=15  tracked 37/56  non-copl 37  MC live  1.145  MC worst  1.249  Fitz worst 1.154
+SQPNP     600 mm  top_h=20  tracked 37/56  non-copl 37  MC live  1.119  MC worst  1.217  Fitz worst 1.147
+SQPNP     600 mm  top_h=25  tracked 37/56  non-copl 37  MC live  1.092  MC worst  1.183  Fitz worst 1.139
+SQPNP     600 mm  top_h=30  tracked 37/56  non-copl 37  MC live  1.064  MC worst  1.148  Fitz worst 1.129
+SQPNP     600 mm  top_h=40  tracked 37/56  non-copl 37  MC live  1.008  MC worst  1.080  Fitz worst 1.105
+
+SQPNP     900 mm  top_h= 0  tracked 35/56  non-copl  0  MC live  2.940  MC worst  3.286  Fitz worst 1.241
+SQPNP     900 mm  top_h= 5  tracked 35/56  non-copl  0  MC live  2.985  MC worst  3.374  Fitz worst 1.240
+SQPNP     900 mm  top_h=10  tracked 35/56  non-copl 35  MC live  2.767  MC worst  2.952  Fitz worst 1.236
+SQPNP     900 mm  top_h=15  tracked 35/56  non-copl 35  MC live  2.720  MC worst  2.894  Fitz worst 1.229
+SQPNP     900 mm  top_h=20  tracked 35/56  non-copl 35  MC live  2.664  MC worst  2.825  Fitz worst 1.219
+SQPNP     900 mm  top_h=25  tracked 35/56  non-copl 35  MC live  2.602  MC worst  2.751  Fitz worst 1.207
+SQPNP     900 mm  top_h=30  tracked 35/56  non-copl 35  MC live  2.537  MC worst  2.674  Fitz worst 1.194
+SQPNP     900 mm  top_h=40  tracked 35/56  non-copl 35  MC live  2.404  MC worst  2.521  Fitz worst 1.163
+

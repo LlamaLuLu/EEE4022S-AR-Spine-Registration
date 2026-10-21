@@ -1,0 +1,38 @@
+56-pose sweep at 900 mm (elevations [10, 20, 30, 40, 50, 60, 70], azimuth step 45.0 deg), 25 mm markers, entry targets (10), gate 5 markers, solver sqpnp, visibility 76 deg / 13 px / margin 10
+noise: static 0.121 px and live 0.91 px per axis; 400 trials per pose
+
+variant              N  poses ok  MC static  MC live  overlay live  Fitzpatrick   (mean TRE over successful poses, mm)
+D1_left_L3           7     37/56      0.382    2.906         0.593        0.953
+D2_caudal            7     37/56      0.393    2.996         0.749        1.243
+D3_split_full       10     38/56      0.237    1.799         0.245        0.394
+D4_split_half       10     40/56      0.195    1.480         0.204        0.332
+D1_final             7     37/56      0.326    2.481         0.595        0.916
+
+Poses tracked (out of 56) as a function of the minimum-marker gate (hard limits | expected value, soft model):
+variant               gate 2   gate 3   gate 4   gate 5   gate 6   |   gate 2   gate 3   gate 4   gate 5   gate 6
+D1_left_L3                43       41       39       37       35   |     43.7     40.6     37.7     34.3     28.9
+D2_caudal                 42       37       37       37       36   |     43.0     40.0     36.8     33.2     28.3
+D3_split_full             45       40       40       38       35   |     44.5     41.4     39.1     36.6     32.8
+D4_split_half             48       40       40       40       40   |     45.8     43.0     40.6     39.0     37.1
+D1_final                  43       39       37       37       35   |     43.0     39.9     37.2     33.7     28.5
+
+Where each variant tracks (gate 5): non-coplanar marker set vs a single plane, and poses whose worst target is predicted under 2 mm
+  D1_left_L3          non-coplanar  37, coplanar   0  |  worst < 2 mm:  37  |  tracked at elevation >= 60: 16/16
+  D2_caudal           non-coplanar  37, coplanar   0  |  worst < 2 mm:  34  |  tracked at elevation >= 60: 16/16
+  D3_split_full       non-coplanar  38, coplanar   0  |  worst < 2 mm:  38  |  tracked at elevation >= 60: 16/16
+  D4_split_half       non-coplanar  40, coplanar   0  |  worst < 2 mm:  40  |  tracked at elevation >= 60: 16/16
+  D1_final            non-coplanar  37, coplanar   0  |  worst < 2 mm:  37  |  tracked at elevation >= 60: 16/16
+
+Hand stand-in (box hand plus capsule forearm) over each target in turn; camera on the surgeon's side; gate 5
+variant              surgeon  cases  ok, no hands  ok, hands  markers lost
+D1_left_L3              left    210           71%        34%          2.00
+D1_left_L3             right    210           57%        52%          0.65
+D2_caudal               left    210           67%        57%          0.61
+D2_caudal              right    210           67%        58%          0.57
+D3_split_full           left    210           71%        54%          0.82
+D3_split_full          right    210           71%        55%          0.70
+D4_split_half           left    210           71%        69%          1.60
+D4_split_half          right    210           71%        69%          1.46
+D1_final                left    210           71%        31%          2.03
+D1_final               right    210           57%        57%          0.29
+Saved results/tre_analysis/solver_rerun/dome_900_sqpnp.csv
