@@ -879,9 +879,10 @@ def cmd_figs(a):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    plt.rcParams.update({"font.size": 8.5, "axes.spines.top": False, "axes.spines.right": False,
-                         "legend.fontsize": 7.5, "savefig.dpi": 300, "pdf.fonttype": 42})
-    BLUE, ORANGE, GREEN, GREY = "#0072B2", "#D55E00", "#009E73", "#7f7f7f"
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import fig_style as FS
+    FS.apply()
+    BLUE, ORANGE, GREEN, GREY = FS.BLUE, FS.TEAL, FS.GREEN, FS.GREY
     K, dist = load_cal(a.calibration)
     sv = soft_from_args(a)
     outdir = Path(a.figdir); outdir.mkdir(parents=True, exist_ok=True)
@@ -889,26 +890,27 @@ def cmd_figs(a):
     # --- tracking: model vs measurement -------------------------------------------------
     rows = load_atp3([a.atp31, a.atp32, a.atp33], a.elev_drop)
     pt = lambda d, e, az: p_at_least(marker_probs(V3_ORIENTED, make_camera_pose(d, e, az), K, dist, sv), GATE) * 100
-    fig, axs = plt.subplots(1, 3, figsize=(6.3, 2.4), sharey=True)
+    fig, axs = plt.subplots(1, 3, figsize=(6.3, 2.1), sharey=True)
     ds = np.arange(300, 1400, 20.0); axs[0].plot(ds / 10, [pt(d, 35, 45) for d in ds], c=BLUE, lw=1.2, label="Simulated")
     azs = np.arange(0, 361, 3.0); axs[1].plot(azs, [pt(450, 33, x) for x in azs], c=BLUE, lw=1.2)
     els = np.arange(5, 71, 1.0); axs[2].plot(els, [pt(460, e, 45) for e in els], c=BLUE, lw=1.2)
     for ax, tag, xi, sc in ((axs[0], "distance", 1, 0.1), (axs[1], "azimuth", 3, 1.0), (axs[2], "elevation", 2, 1.0)):
         sel = [r for r in rows if r[0] == tag]
         ax.plot([r[xi] * sc for r in sel], [r[5] for r in sel], "o", c=ORANGE, ms=3, label="Measured (ATP-3)")
-    axs[0].axvspan(0, 55, color=GREY, alpha=0.12, lw=0)
+    axs[0].axvspan(0, 55, color=FS.LIGHT, alpha=0.6, lw=0)
     axs[0].set_xlabel("Distance (cm)"); axs[1].set_xlabel("Azimuth (°)"); axs[2].set_xlabel("Elevation (°)")
-    axs[1].set_xticks(range(0, 361, 90)); axs[0].set_ylabel("PnP success (% of frames)")
-    axs[0].text(27, 62, "close range\nexcluded:\naim point\nnot logged", ha="center", va="center", fontsize=6.5, color=GREY)
-    axs[0].legend(frameon=False, loc="lower left", bbox_to_anchor=(0.0, 0.12))
-    fig.tight_layout(w_pad=0.6)
+    axs[1].set_xticks(range(0, 361, 90)); axs[0].set_ylabel("PnP success (%)")
+    axs[0].text(27, 40, "close range\nexcluded:\naim point\nnot logged", ha="center", va="center", fontsize=8, color=FS.SLATE)
+    _h, _l = axs[0].get_legend_handles_labels()
+    axs[2].legend(_h, _l, frameon=False, loc="lower left", bbox_to_anchor=(0.0, 0.02), fontsize=8, handlelength=1.3, handletextpad=0.4, labelspacing=0.3)
+    fig.tight_layout(w_pad=0.3)
     fig.savefig(outdir / "fig_mc_tracking_validation.pdf", bbox_inches="tight"); fig.savefig(outdir / "fig_mc_tracking_validation.png", bbox_inches="tight")
     plt.close(fig); print(f"wrote {outdir / 'fig_mc_tracking_validation.pdf'}")
 
     # --- error budget by level -----------------------------------------------------------
     targets, labels = load_pedicles_from_json(a.targets)
-    sets = [("Crisp focus", a.poses, a.measured, a.live_rms), ("Earlier sessions", a.poses_early, a.measured_early, a.live_rms_early)]
-    fig, axs = plt.subplots(1, 2, figsize=(6.3, 2.6), sharey=True)
+    sets = [("Calibrated focus", a.poses, a.measured, a.live_rms), ("Drifted focus", a.poses_early, a.measured_early, a.live_rms_early)]
+    fig, axs = plt.subplots(1, 2, figsize=(6.3, 2.8), sharey=True)
     rms = lambda v: float(np.sqrt(np.mean(np.square(v))))
     lv_all = ["L5", "L4", "L3", "L2", "L1"]
     for ax, (name, pg, mc, lr) in zip(axs, sets):
@@ -922,15 +924,16 @@ def cmd_figs(a):
         m = [rms([o[1] for o in out if o[0] == lv]) if any(o[0] == lv for o in out) else np.nan for lv in lv_all]
         k = [rms([o[3] for o in out if o[0] == lv]) if any(o[0] == lv for o in out) else np.nan for lv in lv_all]
         sy = [np.sqrt(max(mm * mm - kk * kk, 0.0)) if np.isfinite(mm) else np.nan for mm, kk in zip(m, k)]
-        ax.bar(x - w, m, w, color=GREY, label="Measured")
-        ax.bar(x, k, w, color=BLUE, label="Random (simulated)")
-        ax.bar(x + w, sy, w, color=ORANGE, label="Systematic remainder")
-        ax.axhline(2.0, c=GREY, ls="--", lw=0.7)
-        ax.set_xticks(x); ax.set_xticklabels(lv_all); ax.set_title(name)
+        ax.bar(x - w, m, w, color=FS.SLATE, label="Measured")
+        ax.bar(x, k, w, color=FS.SKY, label="Random (simulated)")
+        ax.bar(x + w, sy, w, color=FS.TEAL, label="Remaining error")
+        ax.axhline(2.0, c=FS.BLACK, ls="--", lw=1.0)
+        ax.set_xticks(x); ax.set_xticklabels(lv_all); ax.set_title(name, loc="center")
         ax.set_xlabel("Pedicle level (L5 nearest the markers)")
+    axs[0].set_yticks(np.arange(0, 3.6, 0.5))
     axs[0].set_ylabel("Overlay error, RMS (mm)")
     h, l = axs[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, -0.1))
+    fig.legend(h, l, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, -0.07), fontsize=10.5)
     fig.tight_layout()
     fig.savefig(outdir / "fig_error_budget.pdf", bbox_inches="tight"); fig.savefig(outdir / "fig_error_budget.png", bbox_inches="tight")
     plt.close(fig); print(f"wrote {outdir / 'fig_error_budget.pdf'}")

@@ -2,27 +2,6 @@
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\textwidth]{figures/fig_envelope_diagram.pdf}
-  \caption{Measured working range of the L-bracket system, relative to the phantom origin (centre of the base plate top face). The L-bracket (heavy lines) sits at the caudal-left corner. Each limit was measured one parameter at a time, with the other two near the centre of the full-accuracy range, so combined extremes are not characterised.}
-  \label{fig:results:envelope}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\textwidth]{figures/fig_atp3_tracking.pdf}
-  \caption{ATP-3 sweeps. Share of frames with a valid pose (PnP success) and share spent in the SEARCHING state (overlay lost) against (a) distance, (b) azimuth and (c) elevation. Shading shows the envelope tiers used by the HUD. Open circles in (b) are interpolated azimuths for positions with no valid pose.}
-  \label{fig:results:atp3}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\textwidth]{figures/fig_atp2_overlay_error.pdf}
-  \caption{Overlay error at the entry-point targets against the targets' distance from the marker centroid, measured against painted ground-truth dots with the target marker hidden while clicking. Points are individual measurements; markers show the mean with a 95\% cluster-bootstrap interval over screenshots.}
-  \label{fig:results:atp2}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
   \includegraphics[width=\textwidth]{figures/fig_atp4_occlusion.pdf}
   \caption{ATP-4 occlusion. (a) Predicted TRE (mean over targets, and 95th percentile of the worst target) and (b) PnP success against the number of visible markers, covering markers progressively. In sequence A the last four markers are the near-junction cluster (IDs 0, 2, 5, 7); in sequence B they are all on Face A (TRE is not drawn where fewer than half the frames tracked). Both sequences share the 8-marker baseline recorded at the end of sequence A. Tracking is not attempted below four markers.}
   \label{fig:results:atp4}
@@ -33,18 +12,4 @@
   \includegraphics[width=\textwidth]{figures/fig_tier_comparison.pdf}
   \caption{Tracking and predicted TRE per envelope tier, pooled over the ATP-3 sweeps (frame-weighted). Mean detected markers per tier are in brackets under each label. Predicted TRE depends only on the visible marker set.}
   \label{fig:results:tiers}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\textwidth]{figures/fig_calibration.pdf}
-  \caption{Camera calibration. (a) ChArUco reprojection RMS for the first (v0) and final (v1) calibrations; v1 is reported on the training and held-out image sets. (b) Depth error of the pose estimate against a ruler at 25 to 45 cm, immediately after calibration and in a later re-check.}
-  \label{fig:results:calib}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\textwidth]{figures/fig_atp6_timing.pdf}
-  \caption{ATP-6. (a) Mean per-frame processing time by pipeline stage with the wireframe overlay on and off. (b) End-to-end camera-to-screen latency measured with an on-screen stopwatch photographed through the camera; each point is one reading.}
-  \label{fig:results:atp6}
 \end{figure}
