@@ -198,7 +198,7 @@ EEE4022S-AR-Spine-Registration/
 ├── appendix_figs/          screenshots used in the report appendix
 ├── data/                   calibration, marker maps, ATP logs (see data/README.md)
 ├── docs/                   report figures, UI wireframes, README images
-├── phantom/                Blender files, STL meshes, print files
+├── phantom/                Blender files, STL meshes, print files, version renders
 ├── results/                TRE analysis outputs
 ├── scripts/
 │   ├── calibration/        printable boards, capture, camera calibration
