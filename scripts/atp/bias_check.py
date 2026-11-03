@@ -1,3 +1,6 @@
+"""
+Per-label mean and spread of the ATP-2 dome overlay offsets (dx, dy, dz).
+"""
 import csv, numpy as np
 rows = list(csv.DictReader(open("data/atp_v2/atp2_dome.csv")))
 for lab in sorted({r["label"] for r in rows}):

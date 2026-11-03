@@ -1,3 +1,6 @@
+"""
+ATP-2 summary: overlay error per vertebral level, and its correlation with distance and predicted TRE.
+"""
 import csv
 import numpy as np
 

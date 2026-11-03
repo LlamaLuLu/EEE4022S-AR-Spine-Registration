@@ -482,7 +482,7 @@ def fig_ui(out, src):
     print("  wrote ui_v2_annotated.png")
 
 
-# 5. Monte Carlo simulation flow (inputs -> simulated pose -> comparisons)
+# 6. Monte Carlo simulation flow (inputs -> simulated pose -> comparisons)
 def fig_mcflow(out):
     Wu, Hu = 700, 500
     fig, ax = canvas(Wu, Hu)

@@ -1,3 +1,6 @@
+"""
+One-off: fill dist_from_markers_mm and pred_tre_mm in the ATP-2 dome CSVs after the fact.
+"""
 import csv, json, sys, glob
 from pathlib import Path
 import numpy as np
