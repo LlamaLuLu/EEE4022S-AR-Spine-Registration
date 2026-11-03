@@ -1,3 +1,9 @@
-nibabel==5.4.2
-numpy==2.5.1
-packaging==26.3
+numpy
+scipy
+pandas
+matplotlib
+opencv-contrib-python
+PySide6
+Pillow
+reportlab
+nibabel

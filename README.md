@@ -1,25 +1,16 @@
-<div align="center">
-
 # Fiducial-Based AR Registration for Rigid-Body Surgical Navigation
 
-**A camera, a few printed markers and a 3D model of the spine, turned into a live overlay that shows where a pedicle screw should go, and how far to trust it.**
-
-![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![OpenCV](https://img.shields.io/badge/OpenCV-ArUco%20%2B%20solvePnP-5C3EE8?logo=opencv&logoColor=white)
-![Qt](https://img.shields.io/badge/UI-PySide6%20(Qt)-41CD52?logo=qt&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-52%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-64%20passing-2EA44F)
 ![Licence](https://img.shields.io/badge/licence-MIT-blue)
-![Status](https://img.shields.io/badge/UCT%20EEE4022S-2026-0B6E6E)
 
 <img src="docs/images/demo.gif" alt="Live AR overlay on the lumbar phantom" width="760">
 
-[Aim](#-aim) · [How it works](#-how-it-works) · [Interface tour](#-interface-tour) · [Results](#-results-at-a-glance) · [Quick start](#-quick-start) · [Keys](#-keys) · [Repo layout](#-repo-layout) · [Roadmap](#-roadmap)
+[Aim](#aim) · [How it works](#how-it-works) · [Interface tour](#interface-tour) · [Results](#results-at-a-glance) · [Quick start](#quick-start) · [Keys](#keys) · [Repo layout](#repo-layout) · [Roadmap](#roadmap)
 
-</div>
 
 ---
 
-## 🎯 Aim
+## Aim
 
 Design, implement and evaluate a marker-based augmented reality registration pipeline for pedicle screw guidance on a 3D-printed L1 to L5 lumbar phantom, targeting a **mean target registration error (TRE) below 2 mm** and an **angulation error below 2°**.
 
@@ -28,7 +19,7 @@ Two contributions:
 1. **A marker layout chosen by mathematics, not by eye.** The fiducial layout is optimised once, in simulation, to minimise the predicted TRE at all ten pedicle targets (Fitzpatrick's TRE theory used as a design tool, then checked with a Monte Carlo simulator).
 2. **An overlay that says how much to trust itself.** The expected overlay error is drawn at the target, graded green, amber or red, instead of reporting one accuracy figure after the fact.
 
-## 🧩 Deliverables
+## Deliverables
 
 - [x] CT-derived spine model (VerSe2020), segmented per vertebra, with bilateral pedicle entry and isthmus targets
 - [x] 3D-printed L1 to L5 phantom with a rigid reference mount (P1: L-bracket, P2: dome)
@@ -40,7 +31,7 @@ Two contributions:
 - [ ] Standalone phone version (in progress, see [Roadmap](#-roadmap))
 - [x] Final report, poster and presentation
 
-## ⚙️ How it works
+## How it works
 
 ```mermaid
 flowchart LR
@@ -75,7 +66,7 @@ stateDiagram-v2
 
 **Expected error.** The calibrated 95% radius is `r95 = 1.731 × sqrt(RMS_ref² + max(0, TRE² − TRE_ref²))`, anchored to the measured overlay error of each prototype. The ring is green up to 3.0 mm, amber up to 4.0 mm, and red beyond that or outside the pose envelope.
 
-## 🖥️ Interface tour
+## Interface tour
 
 The interface is built around one question: *can the overlay be trusted right now, for the pedicle in front of me?* Everything else is optional and one key away.
 
@@ -119,7 +110,7 @@ Clicking the real entry dot measures the in-plane overlay error in millimetres, 
 Debug mode (M) shows markers, reprojection RMS, pose, predicted TRE and rolling pose jitter. Help (H) lists every key.
 </details>
 
-## 📊 Results at a glance
+## Results at a glance
 
 ATP results for **P1 (L-bracket)**, from the report. The P2 (dome) results are in the report as well.
 
@@ -134,19 +125,20 @@ ATP results for **P1 (L-bracket)**, from the report. The P2 (dome) results are i
 | End-to-end latency | 182 ms (SD 43) |
 | Repeatability | Reprojection RMS CV 3.4%, pose scatter 0.59 mm |
 
-## 🚀 Quick start
+## Quick start
 
 ```bash
-git clone https://github.com/<user>/EEE4022S-AR-Spine-Registration.git
+git clone https://github.com/LlamaLuLu/EEE4022S-AR-Spine-Registration.git
 cd EEE4022S-AR-Spine-Registration
 python -m venv venv && source venv/bin/activate
-pip install opencv-contrib-python numpy PySide6 Pillow pytest
+pip install -r requirements.txt
 ```
 
-**Replay saved frames (no camera or phantom needed):**
+**Run the tests and the TRE analysis (no camera or phantom needed):**
 
 ```bash
-python scripts/registration/live_ar_overlay_qt.py --source data/screenshots/atp2_crisp
+make test
+make evaluate
 ```
 
 **Live, with a phone as the camera over USB:**
@@ -156,15 +148,17 @@ adb forward tcp:8080 tcp:8080          # with IP Webcam running on the phone
 python scripts/registration/live_ar_overlay_qt.py --source http://localhost:8080/video
 ```
 
-**Useful flags:** `--log run.csv` (per-frame ATP log), `--scene-log run.jsonl` (one scene per frame), `--screenshot-dir <dir>`.
-
-**Run the tests:**
+**Replay saved frames:**
 
 ```bash
-pytest tests
+python scripts/registration/live_ar_overlay_qt.py --source data/screenshots/atp2_crisp
 ```
 
-## ⌨️ Keys
+The raw capture images are not in the repository (see [`data/README.md`](data/README.md)), so replay needs them copied back into `data/screenshots/`. The pose and log files that the analysis scripts read are included.
+
+**Useful flags:** `--log run.csv` (per-frame ATP log), `--scene-log run.jsonl` (one scene per frame), `--screenshot-dir <dir>`.
+
+## Keys
 
 <details>
 <summary><b>Full key map</b></summary>
@@ -193,25 +187,29 @@ pytest tests
 | `Q` | Quit |
 </details>
 
-## 🗂️ Repo layout
+## Repo layout
 
 ```
 EEE4022S-AR-Spine-Registration/
 ├── annotations/            pedicle entry and isthmus targets (Slicer markups)
-├── phantom/                Blender file, STL meshes, per-vertebra overlay meshes
-├── data/                   calibration, marker maps, ATP captures
+├── appendix_figs/          screenshots used in the report appendix
+├── data/                   calibration, marker maps, ATP logs (see data/README.md)
+├── docs/                   report figures, UI wireframes, README images
+├── phantom/                Blender files, STL meshes, print files
+├── results/                TRE analysis outputs
 ├── scripts/
 │   ├── calibration/        printable boards, capture, camera calibration
+│   ├── markers/            printable marker pages and marker maps
 │   ├── registration/       live pipeline and Qt interface (ar_*.py, ui/)
 │   ├── tre_analysis/       Fitzpatrick TRE, Monte Carlo, design variants
-│   └── atp/                acceptance test tools and analysis
-├── tests/                  unit tests (pytest)
-└── docs/                   figures and screenshots
+│   ├── atp/                acceptance test analysis and report figures
+│   └── tools/              CT case filtering, mesh checks, UI wireframes
+└── tests/                  unit tests
 ```
 
 Pipeline modules are small and single-purpose: `ar_tracker` (detection, pose, state machine), `ar_error` (calibrated error and grades), `ar_scene` (the per-frame scene description), `ar_selection` (which pedicle), `ar_jitter` (rolling pose wobble) and `ar_check` (click-to-check geometry). A module table is in [`scripts/registration/README.md`](scripts/registration/README.md).
 
-## 🛣️ Roadmap
+## Roadmap
 
 - [x] Laptop UI v2: pedicle selection, zoom, axial and sagittal views, click-to-check, debug mode
 - [x] Scene description as plain JSON, so other front ends reuse the logic
@@ -221,11 +219,11 @@ Pipeline modules are small and single-purpose: `ar_tracker` (detection, pose, st
 - [ ] Ghost screw preview along the planned trajectory
 - [ ] Head-mounted display (AR glasses) as the end goal; out of scope for this project
 
-## ⚠️ Limitations
+## Limitations
 
 This is a research prototype evaluated on a 3D-printed phantom. It is not a medical device, has no clinical or cadaveric validation, and must not be used for patient care. Click-to-check errors are in-plane: a single click cannot resolve depth along the viewing direction.
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
 Supervised by Prof Fred Nicolls, Department of Electrical Engineering, University of Cape Town. Anatomical data from VerSe2020 (sub-verse835). Marker and TRE theory builds on Fitzpatrick et al. and Garrido-Jurado et al.; the 1.6 mm insertion point benchmark is from Xu et al. (2020).
 

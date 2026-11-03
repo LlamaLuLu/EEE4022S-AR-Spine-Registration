@@ -101,7 +101,7 @@ Predict TRE across all variants:
 ```bash
 python scripts/tre_analysis/evaluate_designs.py \
     --fle 0.35 \
-    --pedicles annotations/pedicle_targets_phantom_frame.json \
+    --pedicles annotations/pedicle_entry_targets.json \
     --outdir results/tre_analysis
 ```
 
@@ -112,7 +112,7 @@ python scripts/tre_analysis/monte_carlo_tre.py \
     --marker-size-mm 20 \
     --pixel-noise-sigma 0.3 \
     --n-trials 10000 \
-    --pedicles annotations/pedicle_targets_phantom_frame.json \
+    --pedicles annotations/pedicle_entry_targets.json \
     --outfile results/tre_analysis/monte_carlo_table.csv
 ```
 
@@ -143,7 +143,7 @@ CLI flags with sensible defaults that assume repo-root execution:
 |---|---|
 | `data/calibration/s22_ultra/camera_calibration.npz` | measure_fle, monte_carlo_tre |
 | `data/fle_measurement/s22_ultra/` | measure_fle |
-| `annotations/pedicle_targets_phantom_frame.json` | evaluate_designs, monte_carlo_tre |
+| `annotations/pedicle_entry_targets.json` | evaluate_designs, monte_carlo_tre |
 | `results/tre_analysis/` | all output files |
 
 If run from `scripts/tre_analysis/` directly, pass explicit paths with
