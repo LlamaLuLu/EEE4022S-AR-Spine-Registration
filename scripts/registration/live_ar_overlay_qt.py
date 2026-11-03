@@ -386,17 +386,6 @@ class ARWindow(QMainWindow):
                     self.mesh_edge_i1 = np.array([e[1] for e in edges], dtype=np.int32)
                     self.mesh_edge_normals = np.array([e[2] for e in edges], dtype=np.float32)
 
-                print(f"  STL bounds (after transform): "
-                      f"min={self.mesh_verts.min(axis=0).round(1)} "
-                      f"max={self.mesh_verts.max(axis=0).round(1)}")
-
-        # Debug: print marker centroid bounds for comparison with STL
-        centroids = np.array([v.mean(axis=0) for v in self.corner_lut.values()])
-        print(f"Marker centroid bounds: min={centroids.min(axis=0).round(1)} "
-              f"max={centroids.max(axis=0).round(1)}")
-        print(f"Target bounds: min={self.target_pts.min(axis=0).round(1)} "
-              f"max={self.target_pts.max(axis=0).round(1)}")
-
         self.rotate_code = ROTATE_MAP[args.rotate]
         cap = open_source(args.source)
         if not cap.isOpened():
@@ -430,8 +419,6 @@ class ARWindow(QMainWindow):
         self.engineer = False                         # M: diagnostics for the engineer, hidden by default
         self._fitted = False                          # window shaped to the camera frame once
 
-        self._frame_count = 0
-        self._last_log = time.perf_counter()
 
         self._csv_file = None
         self._csv_writer = None
@@ -958,18 +945,6 @@ class ARWindow(QMainWindow):
 
         t4 = time.perf_counter()
 
-        self._frame_count += 1
-        elapsed = t4 - self._last_log
-        if elapsed >= 1.0:
-            fps = self._frame_count / elapsed
-            print(f"grab={((t1-t0)*1000):.0f}ms  "
-                  f"detect+pnp={((t2-t1)*1000):.0f}ms  "
-                  f"overlay={((t3-t2)*1000):.0f}ms  "
-                  f"qt={((t4-t3)*1000):.0f}ms  "
-                  f"FPS={fps:.1f}")
-            self._frame_count = 0
-            self._last_log = t4
-
         self._log_row(r, (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
         if self._scene_file is not None:
             self._scene_file.write(scene_to_json(self.scene) + "\n")
@@ -1371,7 +1346,6 @@ class ARWindow(QMainWindow):
             self._cycle_board()
         elif text == "n":
             self._step += 1
-            print(f"--- step {self._step} ---")
         elif text in (",", ".") and isinstance(self.grabber.cap, ReplayCapture):
             print("Replay:", self.grabber.cap.step(-1 if text == "," else +1))
 
