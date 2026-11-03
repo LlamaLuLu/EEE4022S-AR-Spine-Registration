@@ -12,7 +12,7 @@
 
 ## Aim
 
-Design, implement and evaluate a marker-based augmented reality registration pipeline for pedicle screw guidance on a 3D-printed L1 to L5 lumbar phantom, targeting a **mean target registration error (TRE) below 2 mm** and an **angulation error below 2°**.
+Design, implement and evaluate a marker-based augmented reality registration pipeline for pedicle screw guidance on a 3D-printed L1 to L5 lumbar phantom, targeting a **mean entry point error below 2 mm**.
 
 Two contributions:
 
@@ -29,7 +29,8 @@ Two contributions:
 - [x] Evaluation against eight acceptance test procedures (ATPs)
 - [x] Surgeon-oriented laptop interface (UI v2) with unit tests
 - [ ] Standalone phone version (in progress, see [Roadmap](#-roadmap))
-- [x] Final report, poster and presentation
+- [x] Final report
+- [ ] Poster and presentation
 
 ## How it works
 
