@@ -135,6 +135,8 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+The pinned versions in `requirements.txt` are the ones the results were produced with (Python 3.13).
+
 **Run the tests and the TRE analysis (no camera or phantom needed):**
 
 ```bash
