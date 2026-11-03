@@ -69,12 +69,10 @@ def main():
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])
     args = ap.parse_args()
 
-    # --- Calibration ---
     calib = np.load(args.calib)
     K = calib["camera_matrix"]
     D = calib["dist_coeffs"]
 
-    # --- Board geometry ---
     corner_lut = load_corner_lut(args.marker_map)
     n_total = len(corner_lut)
     print(f"Board: {corner_lut.source or 'default V3'} | "
@@ -83,18 +81,15 @@ def main():
 
     is_v3 = set(corner_lut) <= set(range(8))
 
-    # --- Targets ---
     target_pts, target_labels, traj_pairs = load_targets(args.isthmus, args.entry)
     print(f"Targets: {len(target_pts)}, trajectory pairs: {len(traj_pairs)}")
 
-    # --- Wireframe ---
     mesh_verts, mesh_edges = None, None
     if args.stl:
         mesh_verts, mesh_edges = load_stl_for_wireframe(args.stl)
         if mesh_verts is not None:
             print(f"STL wireframe: {len(mesh_verts)} verts, {len(mesh_edges)} edges")
 
-    # --- Video ---
     rotate_code = ROTATE_MAP[args.rotate]
     cap = open_source(args.source)
     if not cap.isOpened():
@@ -103,7 +98,6 @@ def main():
 
     detector = cv2.aruco.ArucoDetector(ARUCO_DICT, cv2.aruco.DetectorParameters())
 
-    # --- State ---
     state = "SEARCHING"
     prev_rvec = prev_tvec = None
     last_good_time = verify_start_time = 0.0
@@ -143,7 +137,6 @@ def main():
             scale = max(screen_w / fw, screen_h / fh)
             new_w, new_h = int(fw * scale), int(fh * scale)
             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-            # Centre-crop to exact screen size
             y0 = (new_h - screen_h) // 2
             x0 = (new_w - screen_w) // 2
             frame = frame[y0:y0 + screen_h, x0:x0 + screen_w].copy()
@@ -159,7 +152,6 @@ def main():
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = detector.detectMarkers(gray)
 
-        # --- Multi-marker PnP ---
         pnp_ok = False
         n_markers = 0
         reproj_rms = float("inf")
@@ -188,7 +180,6 @@ def main():
                     state = "VERIFYING"
                     verify_start_time = now
 
-        # --- Stale / lost ---
         if not pnp_ok:
             if prev_rvec is not None and (now - last_good_time) < STALE_HOLD_SEC:
                 if state not in ("SEARCHING",):
@@ -203,7 +194,6 @@ def main():
                 prev_rvec = prev_tvec = None
                 visible_ids = []
 
-        # --- Verify countdown ---
         countdown = 0.0
         if state == "VERIFYING":
             countdown = VERIFY_COUNTDOWN_SEC - (now - verify_start_time)
@@ -211,7 +201,6 @@ def main():
                 state = "NAVIGATING"
                 print("Registration confirmed (auto).")
 
-        # --- Draw ---
         doff = DETACH_OFFSET_PX if detach else 0
 
         if state in ("VERIFYING", "NAVIGATING", "STALE"):
@@ -233,7 +222,7 @@ def main():
                      state, tre_values, target_labels, countdown,
                      show_help, show_wire, gate=corner_lut.min_markers)
 
-        # --- Axis triad (LPS orientation gizmo, top-right below pose panel) ---
+        # Axis triad (LPS orientation gizmo, top-right below pose panel)
         if show_triad and pnp_ok and state != "SEARCHING":
             fh, fw = frame.shape[:2]
             triad_size = int(fh * 0.05)
@@ -242,7 +231,7 @@ def main():
             draw_axis_triad(frame, tr, rvec, tvec, K, D,
                             triad_cx, triad_cy, triad_size)
 
-        # --- Target radar (right side below triad) ---
+        # Target radar (right side below triad)
         if show_radar and state == "NAVIGATING" and tre_values is not None:
             fh, fw = frame.shape[:2]
             radar_w = int(fw * 0.11)
@@ -257,7 +246,6 @@ def main():
 
         cv2.imshow(WINDOW_NAME, frame)
 
-        # --- Keys + window close ---
         key = cv2.waitKey(1) & 0xFF
         # Detect X button close (works on macOS, Linux, Windows)
         try:

@@ -17,10 +17,6 @@ from PySide6.QtWidgets import (
 )
 
 
-# ====================================================================
-# Helpers
-# ====================================================================
-
 def _apply_shadow(widget, blur=24, offset_y=4, alpha=140):
     """Add a soft drop shadow to a widget."""
     shadow = QGraphicsDropShadowEffect()
@@ -68,10 +64,6 @@ TIER_STATUS = {"full": "good", "reduced": "warn", "outside": "bad"}
 TIER_TEXT = {"full": "FULL", "reduced": "REDUCED", "outside": "OUTSIDE"}
 
 
-# ====================================================================
-# Base panel
-# ====================================================================
-
 class HudPanel(QFrame):
     """
     Rounded translucent panel with an accent bar on top.
@@ -94,10 +86,6 @@ class HudPanel(QFrame):
             self.style().unpolish(self)
             self.style().polish(self)
 
-
-# ====================================================================
-# Status panel (top-left)
-# ====================================================================
 
 class StatusPanel(HudPanel):
     """
@@ -143,7 +131,6 @@ class StatusPanel(HudPanel):
             label.style().polish(label)
 
     def update_values(self, n_markers, pnp_ok, rms):
-        # Markers
         m_str = f"{n_markers}/{self.n_total}"
         if self._last["markers"] != m_str:
             self._markers_val.setText(m_str)
@@ -151,14 +138,12 @@ class StatusPanel(HudPanel):
                              "good" if n_markers >= self.gate else "bad")
             self._last["markers"] = m_str
 
-        # PnP
         p_str = "OK" if pnp_ok else "FAIL"
         if self._last["pnp"] != p_str:
             self._pnp_val.setText(p_str)
             self._set_status(self._pnp_val, "good" if pnp_ok else "bad")
             self._last["pnp"] = p_str
 
-        # RMS
         if rms is None or rms != rms:  # NaN check
             r_str = "--"
             r_status = "muted"
@@ -179,9 +164,6 @@ class StatusPanel(HudPanel):
         self._board_val.setText(label)
         self._last["markers"] = None     # redraw "n/N" with the new total
 
-# ====================================================================
-# Pose panel (top-right)
-# ====================================================================
 
 class PosePanel(HudPanel):
     """
@@ -300,10 +282,6 @@ class JitterPanel(HudPanel):
         self._n_val.setText(f"{n} frames")
 
 
-# ====================================================================
-# TRE panel (bottom-left)
-# ====================================================================
-
 class TrePanel(HudPanel):
     """
     Shows best target label and its TRE, plus a legend row.
@@ -319,7 +297,6 @@ class TrePanel(HudPanel):
         tgt_row, self._tgt_val = _row("Target", "--")
         tre_row, self._tre_val = _row("Error (95%)", "--")
 
-        # Legend row
         legend = QWidget()
         legend.setAttribute(Qt.WA_TranslucentBackground, True)
         legend_layout = QHBoxLayout(legend)
@@ -383,8 +360,7 @@ class TrePanel(HudPanel):
             tre_str = "--"
             status = "muted"
 
-        # Cache text AND status, so a tier change recolours even when
-        # the text is unchanged.
+        # Cache text and status so a tier change recolours even if the text is the same.
         if self._last["tgt"] != (bl, status):
             self._tgt_val.setText(bl)
             self._set_status(self._tgt_val, status)
@@ -406,10 +382,6 @@ class TrePanel(HudPanel):
             self._set_status(self._tre_val, status)
             self._last["tre"] = (text, status)
 
-
-# ====================================================================
-# State pill (top-center)
-# ====================================================================
 
 class StatePill(QFrame):
     """
@@ -474,10 +446,6 @@ class StatePill(QFrame):
         self.adjustSize()
 
 
-# ====================================================================
-# Shortcuts panel (bottom-right)
-# ====================================================================
-
 class ShortcutsPanel(QFrame):
     """
     List of keyboard shortcuts.
@@ -520,9 +488,7 @@ class ShortcutsPanel(QFrame):
             layout.addWidget(name_label, i, 1)
 
 
-# ====================================================================
 # Axis triad widget (LPS orientation gizmo)
-# ====================================================================
 
 class AxisTriadWidget(QWidget):
     """
@@ -589,16 +555,13 @@ class AxisTriadWidget(QWidget):
             col = QColor(self._AXIS_COLS[name])
             if depth > 0.3:
                 col.setAlpha(120)
-            # Line
             pen = QPen(col, 2.5)
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
             painter.drawLine(cx, cy, ex, ey)
-            # Tip
             painter.setBrush(QBrush(col))
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(ex - 5, ey - 5, 10, 10)
-            # Label
             painter.setPen(col)
             painter.setFont(QFont("Helvetica Neue", 11, QFont.Bold))
             # label sits just beyond the tip, along the axis direction, so it never lies on a line
@@ -608,10 +571,6 @@ class AxisTriadWidget(QWidget):
             lx, ly = ex + ux * 15, ey + uy * 15
             painter.drawText(QRectF(lx - 10, ly - 10, 20, 20), Qt.AlignCenter, name)
 
-
-# ====================================================================
-# Target radar widget
-# ====================================================================
 
 class TargetRadarWidget(QWidget):
     """
@@ -666,12 +625,10 @@ class TargetRadarWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Title
         painter.setPen(QColor(135, 145, 150))
         painter.setFont(QFont("Menlo", 11, QFont.Bold))
         painter.drawText(16, 26, "TARGETS")
 
-        # Column headers
         painter.setPen(QColor(78, 85, 96))
         painter.setFont(QFont("Menlo", 10))
         painter.drawText(72, 50, "L")
@@ -680,7 +637,6 @@ class TargetRadarWidget(QWidget):
         if not self._groups:
             return
 
-        # Rows: L1 to L5
         levels = sorted({lv for (lv, _) in self._groups.keys()},
                         key=lambda s: int(s[1:]) if s[1:].isdigit() else 99)
 

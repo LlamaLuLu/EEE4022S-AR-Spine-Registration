@@ -36,7 +36,7 @@ class Selection:
         self.levels = sorted({lv for lv, _ in self.order})
         self.current = None                        # None = overview
 
-    # ---- reading ----
+    # reading
     @property
     def is_overview(self):
         return self.current is None
@@ -76,7 +76,7 @@ class Selection:
         return (self.levels[k - 1] if k > 0 else None,
                 self.levels[k + 1] if k < len(self.levels) - 1 else None)
 
-    # ---- changing (each returns True if the selection changed) ----
+    # changing (each returns True if the selection changed)
     def _set(self, new):
         if new is not None and new not in self.pedicles:
             return False

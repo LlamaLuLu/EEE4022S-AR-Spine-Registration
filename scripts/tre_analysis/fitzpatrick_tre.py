@@ -67,7 +67,7 @@ def predict_tre(fiducials_mm: np.ndarray,
     return np.sqrt(tre_sq)
 
 
-# --- Sanity check against a known symmetric case ---
+# Sanity check against a known symmetric case
 if __name__ == "__main__":
     # A regular tetrahedron of fiducials around the origin, centroid at origin.
     # By symmetry all principal-axis spreads are equal, and TRE at the centroid

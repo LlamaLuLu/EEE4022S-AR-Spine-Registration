@@ -34,9 +34,7 @@ from make_ch3_figures import canvas, rbox, arr, poly, tag, save, P1_TINT, P2_TIN
 W = FS.W
 INK = FS.BLACK
 
-# ---------------------------------------------------------------------------------------
 # 1. Reported accuracy
-# ---------------------------------------------------------------------------------------
 # (label, centre mm, low, high or None, error type, setting)
 STUDIES = [
     ("Zhang 2023", "2D/3D to X-ray, spine model", 0.50, 0.35, 0.63, "surface", "phantom"),
@@ -95,9 +93,7 @@ def fig_accuracy(out):
     save(fig, out, "lit_accuracy_landscape")
 
 
-# ---------------------------------------------------------------------------------------
 # 2. Families of registration methods
-# ---------------------------------------------------------------------------------------
 def fig_tree(out):
     Wu, Hu = 630, 296
     fig, ax = canvas(Wu, Hu)
@@ -142,9 +138,7 @@ def fig_tree(out):
     save(fig, out, "lit_registration_taxonomy")
 
 
-# ---------------------------------------------------------------------------------------
 # 3. Predicted RMS TRE, clustered vs spread
-# ---------------------------------------------------------------------------------------
 CLUSTERED = [(12, 2), (3, 11), (-11, 6), (-5, -7), (10, -8), (2, -13)]
 SPREAD = [(15, 45), (-45, 25), (50, 10), (-20, -30), (40, -35), (5, -50)]
 FLE_MM = 0.5

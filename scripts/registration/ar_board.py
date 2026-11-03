@@ -34,7 +34,7 @@ DEFAULT_MARKER_SIZE_MM = 20.0
 MIN_MARKERS_PNP = 4             # default gate; a marker map can set its own (dome maps use 5)
 
 # Solver. SQPNP is globally optimal and needs no starting guess; ITERATIVE can
-# converge to a wrong pose on near-planar marker sets (see Simulator update).
+# converge to a wrong pose on near-planar marker sets.
 PNP_FLAG = cv2.SOLVEPNP_SQPNP
 PNP_REFINE_LM = False           # optional Levenberg-Marquardt polish on reprojection error
 

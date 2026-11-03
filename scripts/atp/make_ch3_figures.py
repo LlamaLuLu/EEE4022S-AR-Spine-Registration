@@ -45,9 +45,7 @@ def save(fig, out, name):
     print(f"  wrote {name}.pdf / .png")
 
 
-# ---------------------------------------------------------------------------------------
 # drawing helpers (canvas units: 100 per inch, y up)
-# ---------------------------------------------------------------------------------------
 def canvas(w_units, h_units):
     fig = plt.figure(figsize=(w_units / 100, h_units / 100))
     ax = fig.add_axes([0, 0, 1, 1])
@@ -75,9 +73,7 @@ def tag(ax, x, y, text, color=FS.SLATE, fs=8.5, **kw):
     return ax.text(x, y, text, fontsize=fs, color=color, zorder=6, linespacing=1.25, **kw)
 
 
-# ---------------------------------------------------------------------------------------
 # 1. Two design cycles (swim lanes)
-# ---------------------------------------------------------------------------------------
 def fig_cycles(out):
     Wu, Hu = 630, 290
     fig, ax = canvas(Wu, Hu)
@@ -124,9 +120,7 @@ def fig_cycles(out):
     save(fig, out, "method_cycles")
 
 
-# ---------------------------------------------------------------------------------------
 # 2. System architecture (grouped, with simple line icons)
-# ---------------------------------------------------------------------------------------
 def ic_ct(ax, x, y, c, a):
     for k in (-11, 0, 11):
         ax.add_patch(Polygon([(x - 16, y + k - 4), (x - 8, y + k + 4), (x + 16, y + k + 4), (x + 8, y + k - 4)],
@@ -247,9 +241,7 @@ def fig_architecture(out):
     save(fig, out, "method_architecture")
 
 
-# ---------------------------------------------------------------------------------------
 # 3. State machine of the overlay (checked against scripts/registration/ar_tracker.py)
-# ---------------------------------------------------------------------------------------
 def fig_states(out):
     Wu, Hu = 630, 300
     fig, ax = canvas(Wu, Hu)
@@ -293,9 +285,7 @@ def fig_states(out):
     save(fig, out, "fig_method_states")
 
 
-# ---------------------------------------------------------------------------------------
 # 4. Marker visibility model (decluttered)
-# ---------------------------------------------------------------------------------------
 def logistic_down(x, x50, sc):
     return 1.0 / (1.0 + np.exp((x - x50) / sc))
 
@@ -456,9 +446,7 @@ def fig_visibility_row(out):
     save(fig, out, "fig_method_visibility_row")
 
 
-# ---------------------------------------------------------------------------------------
 # 5. UI screenshot: numbered callouts with bigger circles
-# ---------------------------------------------------------------------------------------
 def fig_ui(out, src):
     from PIL import Image, ImageDraw, ImageFont
     if not src or not Path(src).exists():
@@ -494,9 +482,7 @@ def fig_ui(out, src):
     print("  wrote ui_v2_annotated.png")
 
 
-# ---------------------------------------------------------------------------------------
 # 5. Monte Carlo simulation flow (inputs -> simulated pose -> comparisons)
-# ---------------------------------------------------------------------------------------
 def fig_mcflow(out):
     Wu, Hu = 700, 500
     fig, ax = canvas(Wu, Hu)

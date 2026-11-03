@@ -1,30 +1,15 @@
 """
-Live AR overlay for spine navigation (Qt version).
+Live AR overlay for spine navigation (Qt interface).
 
-Qt-based UI: video frame shown in a QLabel, HUD widgets stacked on top.
-Only widgets whose values change get repainted.
+Reads frames from a camera, an IP Webcam stream or a folder of saved frames,
+tracks the marker array, and draws the selected pedicle's trajectory and
+expected error over the video. The keys are listed in the help overlay (H).
 
-Scaffold: video stream + StatusPanel + keyboard shortcuts (q to quit).
-Other HUD widgets (pose, TRE, radar, triad, state pill, shortcuts)
-will follow after this scaffold verifies.
+    python scripts/registration/live_ar_overlay_qt.py --source http://localhost:8080/video
 
-Usage (from repo root):
-    python scripts/registration/live_ar_overlay_qt.py \
-        --source http://192.168.1.42:8080/video \
-        --calib data/calibration/s22_ultra/camera_calibration.npz \
-        --isthmus annotations/pedical_isthmus_targets.json \
-        --entry annotations/pedicle_entry_targets.json \
-        --marker-map data/bracket_markers/marker_map.json \
-        --stl phantom/meshes/v1_print/BASE_v1.4.stl
-
-UI v2 (pedicle selection) is the default: the per-vertebra meshes in
-phantom/meshes/v3_overlay are loaded automatically. Select one pedicle at a
-time. Keys: W/S or Up/Down step the vertebra, A/D or Left/Right pick the side,
-1-5 jump to a level, [ and ] walk the ten pedicles in order, T (or 0) shows all
-levels, Y wireframe, E error circle, Z zoom view (+ / - or the wheel change the zoom), X axial view, L sagittal (lateral) view, V move those two beside the main view or back to the rail, F fullscreen, P photo, M debug mode (ArUco
-boxes, marker count, pose, Shift+P residuals), H or ? help.
-If those meshes are missing or fail to load, the original single-mesh
-wireframe (--stl) is used instead. Pass --vertebrae-dir none to force it.
+The per-vertebra meshes in phantom/meshes/v3_overlay are used by default. If
+they are missing, the single-mesh wireframe from --stl is used instead
+(--vertebrae-dir none forces it).
 """
 
 import argparse
@@ -44,7 +29,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QSizePolicy,
 )
 
-# ArUco + TRE pipeline (unchanged from cv2 version)
 from ar_board import (
     ARUCO_DICT, build_corner_lut, load_marker_map, 
     load_corner_lut, multi_marker_pnp, decompose_pose,
@@ -69,7 +53,6 @@ from ui.stl import (
 )
 from ar_theme import envelope_tier
 
-# Qt HUD
 from ui.styles import QSS
 from ui.hud import AxisTriadWidget
 from ui.rail import Rail, HelpOverlay, RAIL_QSS
@@ -184,7 +167,7 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
                                  rvec, tvec, K, D)
         return p.reshape(-1, 2)
 
-    # ---- guide band beyond the entry, thin line inside the bone ----
+    # guide band beyond the entry, thin line inside the bone
     p_e = proj([entry, entry + axis * ext_mm, isth])
     _blend_lines(frame, np.round(np.stack([p_e[0], p_e[1]])).astype(np.int32).reshape(1, 2, 2),
                  status_colour if status_colour is not None else OUTER_COLOUR,
@@ -193,7 +176,6 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
                  status_colour if status_colour is not None else INNER_COLOUR,
                  0.95, thin)
 
-    # ---- scale along one edge ----
     ks = np.arange(np.ceil(-depth / TICK_MM) * TICK_MM, ext_mm + 1e-6, TICK_MM)
     ks = ks[np.abs(ks) > 1e-6]                  # the entry point itself is marked by the arrowhead
     pts = proj([entry + axis * k for k in ks])
@@ -218,7 +200,7 @@ def draw_focus_trajectory(frame, entry_mm, isthmus_mm, rvec, tvec, K, D,
     _blend_lines(frame, np.round(np.stack([a_pt, b_pt], axis=1)).astype(np.int32),
                  white, TICK_ALPHA, 1)
 
-    # ---- rotated labels beyond the entry ----
+    # rotated labels beyond the entry
     # Label every LABEL_MM, or every 20/30 mm if the view is too small for the numbers to fit.
     (tw2, th), _ = cv2.getTextSize("00", cv2.FONT_HERSHEY_SIMPLEX, txt_scale, 1)
     p10 = proj([entry, entry + axis * LABEL_MM])
@@ -311,21 +293,16 @@ class FrameGrabber:
         self.cap.release()
 
 
-# ====================================================================
-# Main window
-# ====================================================================
-
 class ARWindow(QMainWindow):
     def __init__(self, args):
         super().__init__()
         self.args = args
 
-        # --- Calibration ---
         calib = np.load(args.calib)
         self.K = calib["camera_matrix"]
         self.D = calib["dist_coeffs"]
 
-        # --- Board geometry: one or both boards, auto picks from the visible markers ---
+        # one or both boards; auto picks from the visible markers
         self.selector = BoardSelector(
             load_boards(args.marker_map or default_map_paths(_REPO)), args.board)
         for b in self.selector.boards.values():
@@ -333,18 +310,16 @@ class ARWindow(QMainWindow):
                   f"gate {b.gate}, {b.lut.marker_size_mm:g} mm")
         print(f"Board mode: {self.selector.mode}")
         
-        # --- Targets ---
         self.target_pts, self.target_labels, self.traj_pairs = load_targets(
             args.isthmus, args.entry
         )
         print(f"Targets: {len(self.target_pts)}, "
               f"trajectory pairs: {len(self.traj_pairs)}")
 
-        # Which pedicle is selected (single source of truth for keys, rail, clicks)
+        # selected pedicle: the single source of truth for keys, rail and clicks
         self.selection = Selection(self.target_labels)
         self.entry_idx = np.array(self.selection.all_entry_idx, dtype=int)
 
-        # --- Per-vertebra meshes (UI v2) ---
         self.vertebrae = None
         vdir = args.vertebrae_dir
         if str(vdir).lower() not in ("none", "off", ""):
@@ -368,20 +343,16 @@ class ARWindow(QMainWindow):
                          if args.stl and Path(args.stl).exists() else
                          "fallback --stl is missing too, so no mesh will be drawn."))
 
-        # --- Wireframe ---
         self.mesh_verts = None
         self.mesh_edge_i0 = self.mesh_edge_i1 = self.mesh_edge_normals = None
         if args.stl and self.vertebrae is None and Path(args.stl).exists():
             verts, edges = load_stl_for_wireframe(args.stl)
             if verts is not None:
-                # Apply scale (Blender metres → mm) and offset
                 verts_mm = (verts * args.stl_scale
                             + np.array(args.stl_offset, dtype=np.float32))
 
-                # Runtime decimation: merge vertices within grid_mm of
-                # each other, which collapses small triangles and reduces
-                # edge count. grid=1mm keeps fine detail; grid=3-4mm gives
-                # a recognisable shape at much higher FPS.
+                # merge vertices within grid_mm of each other to collapse small triangles: 1 mm keeps
+                # the detail, 3 to 4 mm still gives a recognisable shape at a much higher FPS
                 grid = args.stl_decimate
                 if grid > 0:
                     rounded = np.round(verts_mm / grid) * grid
@@ -426,7 +397,6 @@ class ARWindow(QMainWindow):
         print(f"Target bounds: min={self.target_pts.min(axis=0).round(1)} "
               f"max={self.target_pts.max(axis=0).round(1)}")
 
-        # --- Video ---
         self.rotate_code = ROTATE_MAP[args.rotate]
         cap = open_source(args.source)
         if not cap.isOpened():
@@ -443,7 +413,6 @@ class ARWindow(QMainWindow):
             ARUCO_DICT, cv2.aruco.DetectorParameters()
         )
 
-        # --- Tracking (detection, PnP, state machine, TRE) ---
         self.tracker = Tracker(self.detector, self.selector, self.K, self.D, self.target_pts, args.fle)
         self.show_ellipses = self.show_wire = True
         self.zoom_idx = ZOOM_DEFAULT
@@ -461,11 +430,9 @@ class ARWindow(QMainWindow):
         self.engineer = False                         # M: diagnostics for the engineer, hidden by default
         self._fitted = False                          # window shaped to the camera frame once
 
-        # --- Timing instrumentation ---
         self._frame_count = 0
         self._last_log = time.perf_counter()
 
-        # --- CSV data logger (for ATP tests) ---
         self._csv_file = None
         self._csv_writer = None
         self._step = 0
@@ -473,7 +440,6 @@ class ARWindow(QMainWindow):
             import csv
             self._csv_file = open(args.log, "w", newline="")
             self._csv_writer = csv.writer(self._csv_file)
-            # Header
             tre_headers = [f"TRE_{l}" for l in self.target_labels]
             self._csv_writer.writerow([
                 "timestamp", "step", "state", "n_markers", "pnp_ok", "rms_px",
@@ -484,7 +450,6 @@ class ARWindow(QMainWindow):
             ] + tre_headers + ["jitter_mm", "jitter_depth_mm", "jitter_n", "board"])
             print(f"Logging to: {args.log}")
 
-        # --- Screenshot ---
         self._screenshot_dir = Path(args.screenshot_dir)
         self._screenshot_dir.mkdir(parents=True, exist_ok=True)
         self._screenshot_count = 0
@@ -492,10 +457,8 @@ class ARWindow(QMainWindow):
         self._last_clean_bgr = None
         self._last_pose = None
 
-        # --- Build UI ---
         self._build_ui()
 
-        # --- Timer for frame updates (~30 FPS) ---
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame)
         self.timer.start(33)
@@ -623,7 +586,6 @@ class ARWindow(QMainWindow):
         self.rail.set_view("sagittal", self.views["sagittal"])
         self.resize(1360, 800)
 
-    # ---- overlay placement ----
 
     def eventFilter(self, obj, event):
         if obj is self.stage and event.type() == QEvent.Resize:
@@ -728,7 +690,7 @@ class ARWindow(QMainWindow):
             self.showFullScreen()
         QTimer.singleShot(900, lambda: self.timer.start(33))
 
-    # ---- click to check: where is the real entry dot compared with the overlay? ----
+    # click to check: where is the real entry dot compared with the overlay?
 
     def _on_main_click(self, pos):
         if self.views["zoom"]:                    # the camera inset is too small to click on
@@ -954,10 +916,6 @@ class ARWindow(QMainWindow):
         self.hint_bar.raise_()
 
 
-    # ================================================================
-    # Frame loop
-    # ================================================================
-
     def next_frame(self):
         t0 = time.perf_counter()
 
@@ -992,7 +950,6 @@ class ARWindow(QMainWindow):
 
         self._update_widgets(r)                       # Qt HUD
 
-        # --- Push frame to video label ---
         self._last_r = r
         self._last_frame_bgr = frame.copy()
         self._last_clean_bgr = clean
@@ -1001,7 +958,6 @@ class ARWindow(QMainWindow):
 
         t4 = time.perf_counter()
 
-        # --- Log timing once per second ---
         self._frame_count += 1
         elapsed = t4 - self._last_log
         if elapsed >= 1.0:
@@ -1018,7 +974,6 @@ class ARWindow(QMainWindow):
         if self._scene_file is not None:
             self._scene_file.write(scene_to_json(self.scene) + "\n")
 
-    # ---- rendering: draws the FrameResult onto the numpy frame ----
 
     def _draw_overlays(self, frame, r):
         """Main view: engineer boxes, then the scene with the real camera matrix."""
@@ -1035,9 +990,8 @@ class ARWindow(QMainWindow):
             return
 
         if self.show_wire and self.vertebrae is not None and state != "STALE":
-            # UI v2: VERIFYING shows every level; NAVIGATING shows the
-            # focused level bold with neighbours ghosted (or all levels
-            # if no focus is set).
+            # VERIFYING shows every level; NAVIGATING shows the focused level bold with neighbours
+            # ghosted (all levels if none is focused)
             sel = self.focus_level if state == "NAVIGATING" else None
             if zoom:                                     # thicker line, exact faint fill
                 draw_vertebra_layers(frame, self.vertebrae, rvec, tvec, K, D, selected=sel,
@@ -1197,7 +1151,6 @@ class ARWindow(QMainWindow):
         top = int((pane.tag.height() + 14) * pane.devicePixelRatioF())      # keep clear of the title tag
         pane.show_frame(sl.render(w, h, colour, r95_mm, top))
 
-    # ---- HUD: pushes the FrameResult into the Qt widgets ----
 
     def _update_widgets(self, r):
         rail = self.rail
@@ -1339,19 +1292,14 @@ class ARWindow(QMainWindow):
         if abs(h / w - self._frame_aspect) > 1e-6:
             self._frame_aspect = h / w
             self._layout_views()
-        # BGR -> RGB for Qt
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
-        # Fit the whole frame inside the label (nothing cropped)
         pix = pix.scaled(self.video_label.contentsRect().size(),
                          Qt.KeepAspectRatio,
                          Qt.FastTransformation)
         self.video_label.setPixmap(pix)
 
-    # ================================================================
-    # Input
-    # ================================================================
 
     def keyPressEvent(self, event: QKeyEvent):
         k = event.key()
@@ -1374,7 +1322,7 @@ class ARWindow(QMainWindow):
                 self.tracker.print_residuals = True      # debug, one-shot
             else:
                 print("Shift+P: turn on debug mode (M) first")
-        # ---- selection: level, side, overview ----
+        # selection: level, side, overview
         elif k in (Qt.Key_W, Qt.Key_Up):
             self._select(sel.step_level, -1)
         elif k in (Qt.Key_S, Qt.Key_Down):
@@ -1391,7 +1339,7 @@ class ARWindow(QMainWindow):
             self._select(sel.step_pedicle, -1)
         elif text in ("t", "0"):
             self._select(sel.overview)
-        # ---- view and tools ----
+        # view and tools
         elif text == "y":
             self._toggle_option("outline")
         elif text == "e":
@@ -1414,7 +1362,7 @@ class ARWindow(QMainWindow):
             self._save_screenshot()
         elif text == "m":
             self._toggle_engineer()
-        # ---- registration and logging ----
+        # registration and logging
         elif text == "c":
             self.tracker.confirm()
         elif text == "r":
@@ -1483,10 +1431,6 @@ class ARWindow(QMainWindow):
             print(f"Log closed: {self.args.log}")
         super().closeEvent(event)
 
-
-# ====================================================================
-# Main
-# ====================================================================
 
 def main():
     ap = argparse.ArgumentParser()

@@ -27,10 +27,6 @@ except ImportError:
     _PIL = False
 
 
-# ====================================================================
-# Buffered text renderer
-# ====================================================================
-
 class TextRenderer:
     """
     All draw() calls go to an RGBA buffer. flush() composites once.
@@ -112,25 +108,15 @@ class TextRenderer:
                         sc, col, max(1, int(sc)), cv2.LINE_AA)
 
 
-# ====================================================================
-# Flat panel
-# ====================================================================
-
 def panel(frame, x, y, w, h, accent=ACCENT):
     """Flat dark rect with a thin accent line on top."""
     ov = frame.copy()
     cv2.rectangle(ov, (x, y), (x + w, y + h), BG_PANEL, -1)
     cv2.addWeighted(ov, LAYOUT.panel_alpha, frame,
                     1 - LAYOUT.panel_alpha, 0, frame)
-    # Accent bar
     cv2.line(frame, (x, y), (x + w, y), accent, LAYOUT.accent_h, cv2.LINE_AA)
-    # Subtle bottom/right border
     cv2.line(frame, (x, y + h), (x + w, y + h), BORDER, 1, cv2.LINE_AA)
 
-
-# ====================================================================
-# Overlay elements
-# ====================================================================
 
 def draw_crosshair(frame, cx, cy, sz=5, col=TEXT_PRIMARY, outline=True,
                    outline_col=(0, 0, 0)):
@@ -204,11 +190,9 @@ def draw_wireframe(frame, verts, edge_i0, edge_i1, edge_normals,
     if verts is None or edge_i0 is None:
         return
 
-    # Project all vertices in one call
     pts, _ = cv2.projectPoints(verts.astype(np.float64), rvec, tvec, K, D)
     pts = pts.reshape(-1, 2).astype(np.int32)
 
-    # Vectorized backface cull
     mids = (verts[edge_i0] + verts[edge_i1]) * 0.5
     to_cam = cam_pos - mids
     dots = np.sum(edge_normals * to_cam, axis=1)
@@ -233,9 +217,7 @@ def draw_wireframe(frame, verts, edge_i0, edge_i1, edge_normals,
     frame[mask] = blended[mask]
 
 
-# ====================================================================
 # HUD: compact single-line rows, flat panels
-# ====================================================================
 
 def _row(tr, frame, x, y, label, value, val_col=TEXT_PRIMARY):
     """Label on left (muted), value on right (bright). Returns row height."""
@@ -251,9 +233,7 @@ def _state_col(state):
             "NAVIGATING": COL_GOOD, "STALE": COL_BAD}.get(state, ACCENT)
 
 
-# ====================================================================
 # Axis triad gizmo (phantom LPS orientation indicator)
-# ====================================================================
 
 # LPS axis colours matching medical imaging convention:
 #   +X = patient Left  → red
@@ -303,15 +283,12 @@ def draw_axis_triad(frame, tr, rvec, tvec, K, D, cx, cy, size_px):
         line_col = tuple(int(c * alpha) for c in col)
         cv2.line(frame, (cx, cy), (ex, ey), line_col, 2, cv2.LINE_AA)
         cv2.circle(frame, (ex, ey), tip_r, col, -1, cv2.LINE_AA)
-        # Label offset slightly past the tip
         label_x = ex + (5 if ex >= cx else -12)
         label_y = ey - 8
         tr.text(frame, name, label_x, label_y, "small", col, "sans")
 
 
-# ====================================================================
 # Target radar (grid of coloured dots showing TRE status per target)
-# ====================================================================
 
 def draw_target_radar(frame, tr, tre_vals, labels, in_env, x, y, w, h):
     """
@@ -322,7 +299,6 @@ def draw_target_radar(frame, tr, tre_vals, labels, in_env, x, y, w, h):
     if tre_vals is None or len(tre_vals) == 0:
         return
 
-    # Panel background
     panel(frame, x, y, w, h, ACCENT_DIM)
 
     p = LAYOUT.panel_pad
@@ -367,30 +343,25 @@ def draw_target_radar(frame, tr, tre_vals, labels, in_env, x, y, w, h):
     col_gap = int(inner_w * 0.35)
     row_h = int(dot_r * 2.8)
 
-    # Determine levels present
     levels = sorted({lv for (lv, _) in groups.keys()},
                     key=lambda s: int(s[1:]) if s[1:].isdigit() else 99)
 
     for row_i, level in enumerate(levels):
         ry = inner_y + row_i * row_h + dot_r
-        # Level label at left
         tr.text(frame, level, inner_x, ry - dot_r,
                 "small", TEXT_MUTED, "mono")
 
-        # L dot
         if (level, "L") in groups:
             tre = groups[(level, "L")]
             c = tre_colour(tre, in_env)
             cv2.circle(frame, (inner_x + int(inner_w * 0.35), ry),
                        dot_r, c, -1, cv2.LINE_AA)
-        # R dot
         if (level, "R") in groups:
             tre = groups[(level, "R")]
             c = tre_colour(tre, in_env)
             cv2.circle(frame, (inner_x + int(inner_w * 0.65), ry),
                        dot_r, c, -1, cv2.LINE_AA)
 
-    # Column headers
     header_y = inner_y - 2
     tr.text(frame, "L", inner_x + int(inner_w * 0.35) - 4, header_y,
             "small", TEXT_MUTED, "sans")
@@ -406,7 +377,6 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
     row_h = max(int(h * 0.045), 22)
     p = LAYOUT.panel_pad
 
-    # ---- Top-left: status ----
     pw = int(w * 0.22)
     ph = p * 2 + row_h * 3
     panel(frame, pad, pad, pw, ph, _state_col(state))
@@ -422,7 +392,6 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
     rms_s = f"{reproj_rms:.1f}px" if np.isfinite(reproj_rms) else "--"
     _row(tr, frame, x0, y0 + dy, "RMS", rms_s)
 
-    # ---- Top-right: pose ----
     pw_tr = int(w * 0.20)
     panel(frame, w - pad - pw_tr, pad, pw_tr, ph,
           COL_GOOD if in_env else COL_BAD)
@@ -440,7 +409,6 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
     _row(tr, frame, x0, y0 + dy, "AZ", a_s,
          COL_GOOD if in_env else COL_BAD)
 
-    # ---- Bottom-left: TRE ----
     pw_bl = int(w * 0.30)
     ph_bl = p * 2 + row_h * 2 + int(h * 0.035)
     panel(frame, pad, h - pad - ph_bl, pw_bl, ph_bl, ACCENT)
@@ -469,7 +437,6 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
         tr.text(frame, t, dx + dot_r * 3, leg_y - dot_r,
                 "small", TEXT_SECONDARY)
 
-    # ---- Bottom-right: shortcuts ----
     if show_help:
         keys = [("c", "confirm"), ("r", "reject"), ("t", "trajectories"),
                 ("e", "ellipses"), ("w", "wireframe"), ("d", "detach"),
@@ -501,7 +468,6 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
         hint_y = h - pad - int(h * 0.03)
         tr.text(frame, "ESC  HELP", hint_x, hint_y, "small", TEXT_SECONDARY)
 
-    # ---- State pill (top center) ----
     label_map = {"SEARCHING": "SEARCHING", "NAVIGATING": "NAVIGATING",
                  "STALE": "STALE POSE",
                  "VERIFYING": f"VERIFY {max(0, countdown):.1f}s"}
@@ -514,7 +480,6 @@ def draw_hud(frame, tr, n_markers, n_total, pnp_ok, reproj_rms,
     py = pad
     panel(frame, px, py, pw_pill, ph_pill, sc)
 
-    # Status dot
     cv2.circle(frame, (px + int(w * 0.008), py + ph_pill // 2),
                max(4, int(h * 0.006)), sc, -1, cv2.LINE_AA)
     tr.text(frame, txt, px + int(w * 0.018), py + int(h * 0.008),

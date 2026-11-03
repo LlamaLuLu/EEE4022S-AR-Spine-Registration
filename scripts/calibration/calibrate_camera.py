@@ -58,7 +58,7 @@ def main():
         print(f"Only found {len(paths)} images in {args.imagedir}, need more before calibrating.")
         return
 
-    # --- Detect and match every image, keeping filenames aligned ---
+    # Detect and match every image, keeping filenames aligned
     names, obj_list, img_list = [], [], []
     image_size = None
     for path in paths:
@@ -80,7 +80,6 @@ def main():
     n = len(names)
     print(f"Usable images: {n} of {len(paths)}")
 
-    # --- Train / held-out split ---
     idx = np.arange(n)
     if args.holdout > 0:
         if n - args.holdout < 10:
@@ -98,14 +97,12 @@ def main():
         print("Not enough training images, capture more.")
         return
 
-    # --- Calibrate on training set ---
     rms, K, D, rvecs, tvecs = cv2.calibrateCamera(
         [obj_list[i] for i in train_idx],
         [img_list[i] for i in train_idx],
         image_size, None, None,
     )
 
-    # --- Per-image training error ---
     train_errs = []
     for k, i in enumerate(train_idx):
         e, _ = per_image_rms(obj_list[i], img_list[i], rvecs[k], tvecs[k], K, D)
@@ -122,7 +119,6 @@ def main():
         print(f"\nOutliers (> {OUTLIER_FACTOR:.0f}x median {med:.3f}px). Inspect them; if blurry "
               f"or glared, rerun with:\n  --exclude {' '.join(outliers)}")
 
-    # --- Held-out validation ---
     test_rms = None
     test_errs = []
     if len(test_idx) > 0:
@@ -141,7 +137,6 @@ def main():
         for name, e in test_errs:
             print(f"{name:<18s} {e:8.3f}")
 
-    # --- Summary ---
     print("\n=== Summary ===")
     print(f"Training RMS:  {rms:.4f} px  ({len(train_idx)} images)")
     if test_rms is not None:
