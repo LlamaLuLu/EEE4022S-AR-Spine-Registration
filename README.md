@@ -157,7 +157,7 @@ python scripts/registration/live_ar_overlay_qt.py --source http://localhost:8080
 python scripts/registration/live_ar_overlay_qt.py --source data/screenshots/atp2_crisp
 ```
 
-The raw capture images are not in the repository (see [`data/README.md`](data/README.md)), so replay needs them copied back into `data/screenshots/`. They are available as `screenshots.zip` in the [data release](https://github.com/LlamaLuLu/EEE4022S-AR-Spine-Registration/releases/tag/data-v1); unzip it into `data/screenshots/`. The pose and log files that the analysis scripts read are included.
+The raw capture images are not in the repository (see [`data/README.md`](data/README.md)), so replay needs them copied back into `data/screenshots/`. They are available as `screenshots.zip` in the [data release](https://github.com/LlamaLuLu/EEE4022S-AR-Spine-Registration/releases/tag/data-v1); unzip it into `data/`. The pose and log files that the analysis scripts read are included.
 
 **Useful flags:** `--log run.csv` (per-frame ATP log), `--scene-log run.jsonl` (one scene per frame), `--screenshot-dir <dir>`.
 
