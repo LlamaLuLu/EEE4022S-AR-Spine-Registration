@@ -1,0 +1,62 @@
+{
+  "marker_size_mm": 20.0,
+  "dictionary": "DICT_6X6_50",
+  "slots": [
+    {
+      "slot_index": 0,
+      "aruco_id": 0,
+      "face": "A",
+      "position": "top-left",
+      "face_local_hv": "(15, 15)"
+    },
+    {
+      "slot_index": 1,
+      "aruco_id": 1,
+      "face": "A",
+      "position": "top-right",
+      "face_local_hv": "(65, 15)"
+    },
+    {
+      "slot_index": 2,
+      "aruco_id": 2,
+      "face": "A",
+      "position": "bottom-left",
+      "face_local_hv": "(15, 65)"
+    },
+    {
+      "slot_index": 3,
+      "aruco_id": 3,
+      "face": "A",
+      "position": "bottom-right",
+      "face_local_hv": "(65, 65)"
+    },
+    {
+      "slot_index": 4,
+      "aruco_id": 4,
+      "face": "B",
+      "position": "top-left",
+      "face_local_hv": "(15, 15)"
+    },
+    {
+      "slot_index": 5,
+      "aruco_id": 5,
+      "face": "B",
+      "position": "top-right",
+      "face_local_hv": "(65, 15)"
+    },
+    {
+      "slot_index": 6,
+      "aruco_id": 6,
+      "face": "B",
+      "position": "bottom-left",
+      "face_local_hv": "(15, 65)"
+    },
+    {
+      "slot_index": 7,
+      "aruco_id": 7,
+      "face": "B",
+      "position": "bottom-right",
+      "face_local_hv": "(65, 65)"
+    }
+  ]
+}

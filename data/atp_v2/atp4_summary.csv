@@ -1,0 +1,37 @@
+test,covered_or_dot,frames,mean_markers,g4_pnp_pct,g5_pct,rms_px,pred_tre_mm,ids
+cover A (top first),0,546,5.25,93.8,77.3,1.27,1.25,10 11 12 13 15 16
+cover A (top first),1,126,5.00,100.0,100.0,0.86,1.16,11 12 13 15 16
+cover A (top first),2,161,4.00,100.0,0.0,0.86,1.25,11 12 13 15
+cover A (top first),3,164,3.00,0.0,0.0,nan,nan,
+cover A (top first),4,111,2.00,0.0,0.0,nan,nan,
+cover A (top first),5,90,1.00,0.0,0.0,nan,nan,
+cover A (top first),6,71,1.00,0.0,0.0,nan,nan,
+cover A (top first),7,72,0.00,0.0,0.0,nan,nan,
+cover B (ring first),0,1044,1.73,27.0,21.2,1.25,1.26,10 11 12 13 15
+cover B (ring first),1,156,5.00,100.0,100.0,1.25,1.20,10 11 12 13 15
+cover B (ring first),2,129,4.00,100.0,0.0,1.19,1.55,10 12 13 15
+cover B (ring first),3,88,3.00,0.0,0.0,nan,nan,
+cover B (ring first),4,119,2.00,0.0,0.0,nan,nan,
+cover B (ring first),5,95,2.00,0.0,0.0,nan,nan,
+cover B (ring first),6,79,1.00,0.0,0.0,nan,nan,
+cover B (ring first),7,72,0.00,0.0,0.0,nan,nan,
+"hands surgeon right (az 270, el 60)",L5_R,160,5.00,100.0,100.0,,1.23,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L5_L,189,4.96,100.0,95.8,,1.24,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L4_R,180,5.00,100.0,100.0,,1.23,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L4_L,217,4.49,99.1,49.8,,1.39,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L3_R,164,5.00,100.0,100.0,,1.23,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L3_L,201,4.20,82.6,37.8,,1.40,10 12 13 15
+"hands surgeon right (az 270, el 60)",L2_R,160,5.00,100.0,100.0,,1.23,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L2_L,197,3.65,40.6,37.6,,1.25,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L1_R,159,4.93,100.0,93.1,,1.25,10 12 13 14 15
+"hands surgeon right (az 270, el 60)",L1_L,203,3.41,36.9,35.0,,1.24,10 12 13 14 15
+"hands surgeon left (az 90, el 45)",L5_R,306,4.29,69.0,61.4,,1.60,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L5_L,204,3.84,43.6,40.7,,1.58,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L4_R,239,3.47,40.6,40.2,,1.56,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L4_L,252,3.17,32.1,31.0,,1.56,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L3_R,265,3.27,59.6,41.5,,1.68,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L3_L,205,4.53,98.5,54.6,,1.75,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L2_R,183,5.00,100.0,100.0,,1.55,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L2_L,180,4.42,100.0,42.2,,1.81,10 11 15 16
+"hands surgeon left (az 90, el 45)",L1_R,154,5.00,100.0,100.0,,1.55,10 11 12 15 16
+"hands surgeon left (az 90, el 45)",L1_L,144,4.58,100.0,58.3,,1.74,10 11 12 15 16

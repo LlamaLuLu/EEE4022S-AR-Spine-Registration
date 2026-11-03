@@ -1,0 +1,279 @@
+{
+  "marker_size_mm": 25.0,
+  "dictionary": "DICT_6X6_50",
+  "design": "D1_final",
+  "ring_top": "inward",
+  "min_markers_pnp": 4,
+  "frame": "phantom LPS, origin at plate top centre, mm (+X patient left, +Y up, +Z cranial)",
+  "corner_order": "TL, TR, BR, BL (OpenCV ArUco detector order)",
+  "surface_offset_mm": 3.3,
+  "top_offset_mm": 0.0,
+  "slots": [
+    {
+      "slot_index": 0,
+      "aruco_id": 10,
+      "face": "dome_top",
+      "position": "top, TOP edge cranial",
+      "centre_mm": [
+        120.0,
+        133.3,
+        0.0
+      ],
+      "normal": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "corners_mm": [
+        [
+          132.5,
+          133.3,
+          12.5
+        ],
+        [
+          107.5,
+          133.3,
+          12.5
+        ],
+        [
+          107.5,
+          133.3,
+          -12.5
+        ],
+        [
+          132.5,
+          133.3,
+          -12.5
+        ]
+      ]
+    },
+    {
+      "slot_index": 1,
+      "aruco_id": 11,
+      "face": "dome_ring",
+      "position": "ring 30 deg, TOP edge inward",
+      "centre_mm": [
+        163.55,
+        108.287,
+        25.144
+      ],
+      "normal": [
+        0.07548,
+        0.99619,
+        0.04358
+      ],
+      "corners_mm": [
+        [
+          146.516,
+          109.377,
+          29.743
+        ],
+        [
+          159.016,
+          109.377,
+          8.092
+        ],
+        [
+          180.584,
+          107.198,
+          20.545
+        ],
+        [
+          168.084,
+          107.198,
+          42.195
+        ]
+      ]
+    },
+    {
+      "slot_index": 2,
+      "aruco_id": 12,
+      "face": "dome_ring",
+      "position": "ring 90 deg, TOP edge inward",
+      "centre_mm": [
+        120.0,
+        108.287,
+        50.288
+      ],
+      "normal": [
+        0.0,
+        0.99619,
+        0.08716
+      ],
+      "corners_mm": [
+        [
+          107.5,
+          109.377,
+          37.835
+        ],
+        [
+          132.5,
+          109.377,
+          37.835
+        ],
+        [
+          132.5,
+          107.198,
+          62.74
+        ],
+        [
+          107.5,
+          107.198,
+          62.74
+        ]
+      ]
+    },
+    {
+      "slot_index": 3,
+      "aruco_id": 13,
+      "face": "dome_ring",
+      "position": "ring 150 deg, TOP edge inward",
+      "centre_mm": [
+        76.45,
+        108.287,
+        25.144
+      ],
+      "normal": [
+        -0.07548,
+        0.99619,
+        0.04358
+      ],
+      "corners_mm": [
+        [
+          80.984,
+          109.377,
+          8.092
+        ],
+        [
+          93.484,
+          109.377,
+          29.743
+        ],
+        [
+          71.916,
+          107.198,
+          42.195
+        ],
+        [
+          59.416,
+          107.198,
+          20.545
+        ]
+      ]
+    },
+    {
+      "slot_index": 4,
+      "aruco_id": 14,
+      "face": "dome_ring",
+      "position": "ring 210 deg, TOP edge inward",
+      "centre_mm": [
+        76.45,
+        108.287,
+        -25.144
+      ],
+      "normal": [
+        -0.07548,
+        0.99619,
+        -0.04358
+      ],
+      "corners_mm": [
+        [
+          93.484,
+          109.377,
+          -29.743
+        ],
+        [
+          80.984,
+          109.377,
+          -8.092
+        ],
+        [
+          59.416,
+          107.198,
+          -20.545
+        ],
+        [
+          71.916,
+          107.198,
+          -42.195
+        ]
+      ]
+    },
+    {
+      "slot_index": 5,
+      "aruco_id": 15,
+      "face": "dome_ring",
+      "position": "ring 270 deg, TOP edge inward",
+      "centre_mm": [
+        120.0,
+        108.287,
+        -50.288
+      ],
+      "normal": [
+        -0.0,
+        0.99619,
+        -0.08716
+      ],
+      "corners_mm": [
+        [
+          132.5,
+          109.377,
+          -37.835
+        ],
+        [
+          107.5,
+          109.377,
+          -37.835
+        ],
+        [
+          107.5,
+          107.198,
+          -62.74
+        ],
+        [
+          132.5,
+          107.198,
+          -62.74
+        ]
+      ]
+    },
+    {
+      "slot_index": 6,
+      "aruco_id": 16,
+      "face": "dome_ring",
+      "position": "ring 330 deg, TOP edge inward",
+      "centre_mm": [
+        163.55,
+        108.287,
+        -25.144
+      ],
+      "normal": [
+        0.07548,
+        0.99619,
+        -0.04358
+      ],
+      "corners_mm": [
+        [
+          159.016,
+          109.377,
+          -8.092
+        ],
+        [
+          146.516,
+          109.377,
+          -29.743
+        ],
+        [
+          168.084,
+          107.198,
+          -42.195
+        ],
+        [
+          180.584,
+          107.198,
+          -20.545
+        ]
+      ]
+    }
+  ]
+}

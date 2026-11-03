@@ -180,12 +180,19 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Project data (not tracked, too large and licensed separately)
-data/
+# Large imaging data (CT volumes)
 previews/
 *.nii.gz
 *.nii
 *.dcm
+
+# raw captures and CT volumes, too large for the repo (see data/README.md)
+data/calibration/*/calibration_imgs/
+data/screenshots/**/*.png
+data/screenshots/**/*.jpg
+data/screenshots/**/*.jpeg
+data/screenshots/**/*.mp4
+data/verse20/**/*.mrb
 
 # Mac
 .DS_Store

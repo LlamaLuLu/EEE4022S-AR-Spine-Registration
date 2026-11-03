@@ -1,0 +1,3 @@
+shot,label,level,side,distance_mm,elev_deg,az_deg,n_markers,tier,rms_px,target_u,target_v,dot_u,dot_v,err_px,blind,depth_mm,err_mm,dx_mm,dy_mm,dz_mm,dist_from_markers_mm,pred_tre_mm
+shot_20260929_084553_001,L1_E_L,L1,L,643.6,24.9,34.7,8,full,1.0800163745880127,867.93,308.37,863.12,306.38,5.2,True,641.4,2.545,1.791,0.754,1.643,166.8,1.149
+shot_20260929_084553_001,L2_E_L,L2,L,643.6,24.9,34.7,8,full,1.0800163745880127,898.46,341.56,895.12,338.38,4.61,True,620.0,2.183,1.043,1.28,1.429,134.4,0.945

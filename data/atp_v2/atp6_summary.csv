@@ -1,0 +1,3 @@
+mode,step,frames,fps,grab,detect,overlay,qt,total,p95,max,pnp_pct,markers
+wireframe ON,1,0,,,,,,,,,,
+wireframe OFF,2,0,,,,,,,,,,

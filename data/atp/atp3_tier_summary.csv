@@ -1,0 +1,4 @@
+tier,steps,frames,pnp_success_pct,lost_pct,max_gap_ms,markers_mean,rms_mean,tre_mean_mm,tre_worst_p95_mm
+full,6,2397,93.3,0.0,193.0,6.8,0.95,0.931,2.135
+reduced,33,21815,88.5,0.4,993.0,5.4,0.94,1.151,2.524
+outside,21,7284,34.8,42.5,11903.0,2.0,1.0,1.487,2.524

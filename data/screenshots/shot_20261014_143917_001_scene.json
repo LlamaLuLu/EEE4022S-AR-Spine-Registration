@@ -1,0 +1,399 @@
+{
+ "version": 1,
+ "t": 1791981557.553,
+ "state": "NAVIGATING",
+ "verify_remaining_s": 0.0,
+ "trust": {
+  "status": "good",
+  "title": "Tracking good",
+  "reason": "5 of 7 markers"
+ },
+ "pose": {
+  "rvec": [
+   -0.86238,
+   -1.02398,
+   2.47892
+  ],
+  "tvec": [
+   62.243,
+   -13.055,
+   639.214
+  ]
+ },
+ "quality": {
+  "pnp_ok": true,
+  "n_markers": 5,
+  "n_total": 7,
+  "visible_ids": [
+   16,
+   15,
+   10,
+   11,
+   14
+  ],
+  "rms_px": 1.09,
+  "distance_mm": 642.4,
+  "elev_deg": 45.2,
+  "az_deg": 44.1,
+  "env_tier": "full"
+ },
+ "selection": {
+  "overview": false,
+  "name": "L2 left",
+  "level": 2,
+  "side": "L",
+  "entry": 13,
+  "isthmus": 5
+ },
+ "pedicles": [
+  {
+   "level": 1,
+   "side": "L",
+   "entry": 11,
+   "isthmus": 7
+  },
+  {
+   "level": 1,
+   "side": "R",
+   "entry": 10,
+   "isthmus": 6
+  },
+  {
+   "level": 2,
+   "side": "L",
+   "entry": 13,
+   "isthmus": 5
+  },
+  {
+   "level": 2,
+   "side": "R",
+   "entry": 12,
+   "isthmus": 4
+  },
+  {
+   "level": 3,
+   "side": "L",
+   "entry": 14,
+   "isthmus": 1
+  },
+  {
+   "level": 3,
+   "side": "R",
+   "entry": 15,
+   "isthmus": 0
+  },
+  {
+   "level": 4,
+   "side": "L",
+   "entry": 17,
+   "isthmus": 3
+  },
+  {
+   "level": 4,
+   "side": "R",
+   "entry": 16,
+   "isthmus": 2
+  },
+  {
+   "level": 5,
+   "side": "L",
+   "entry": 18,
+   "isthmus": 9
+  },
+  {
+   "level": 5,
+   "side": "R",
+   "entry": 19,
+   "isthmus": 8
+  }
+ ],
+ "targets": [
+  {
+   "i": 0,
+   "label": "L3_R",
+   "level": 3,
+   "side": "R",
+   "kind": "isthmus",
+   "xyz": [
+    -20.13,
+    71.506,
+    4.415
+   ],
+   "tre_mm": 1.432,
+   "r95_mm": 3.015
+  },
+  {
+   "i": 1,
+   "label": "L3_L",
+   "level": 3,
+   "side": "L",
+   "kind": "isthmus",
+   "xyz": [
+    18.06,
+    70.065,
+    1.58
+   ],
+   "tre_mm": 1.146,
+   "r95_mm": 2.623
+  },
+  {
+   "i": 2,
+   "label": "L4_R",
+   "level": 4,
+   "side": "R",
+   "kind": "isthmus",
+   "xyz": [
+    -23.529,
+    64.804,
+    -29.469
+   ],
+   "tre_mm": 1.401,
+   "r95_mm": 2.972
+  },
+  {
+   "i": 3,
+   "label": "L4_L",
+   "level": 4,
+   "side": "L",
+   "kind": "isthmus",
+   "xyz": [
+    16.071,
+    63.479,
+    -31.214
+   ],
+   "tre_mm": 1.122,
+   "r95_mm": 2.592
+  },
+  {
+   "i": 4,
+   "label": "L2_R",
+   "level": 2,
+   "side": "R",
+   "kind": "isthmus",
+   "xyz": [
+    -17.729,
+    77.397,
+    36.817
+   ],
+   "tre_mm": 1.536,
+   "r95_mm": 3.165
+  },
+  {
+   "i": 5,
+   "label": "L2_L",
+   "level": 2,
+   "side": "L",
+   "kind": "isthmus",
+   "xyz": [
+    16.568,
+    76.552,
+    37.68
+   ],
+   "tre_mm": 1.297,
+   "r95_mm": 2.826
+  },
+  {
+   "i": 6,
+   "label": "L1_R",
+   "level": 1,
+   "side": "R",
+   "kind": "isthmus",
+   "xyz": [
+    -15.636,
+    86.504,
+    69.262
+   ],
+   "tre_mm": 1.689,
+   "r95_mm": 3.391
+  },
+  {
+   "i": 7,
+   "label": "L1_L",
+   "level": 1,
+   "side": "L",
+   "kind": "isthmus",
+   "xyz": [
+    17.856,
+    85.979,
+    70.591
+   ],
+   "tre_mm": 1.472,
+   "r95_mm": 3.073
+  },
+  {
+   "i": 8,
+   "label": "L5_R",
+   "level": 5,
+   "side": "R",
+   "kind": "isthmus",
+   "xyz": [
+    -29.939,
+    70.847,
+    -59.766
+   ],
+   "tre_mm": 1.416,
+   "r95_mm": 2.992
+  },
+  {
+   "i": 9,
+   "label": "L5_L",
+   "level": 5,
+   "side": "L",
+   "kind": "isthmus",
+   "xyz": [
+    20.972,
+    66.258,
+    -60.964
+   ],
+   "tre_mm": 1.093,
+   "r95_mm": 2.554
+  },
+  {
+   "i": 10,
+   "label": "L1_E_R",
+   "level": 1,
+   "side": "R",
+   "kind": "entry",
+   "xyz": [
+    -22.689,
+    101.061,
+    69.972
+   ],
+   "tre_mm": 1.723,
+   "r95_mm": 3.441
+  },
+  {
+   "i": 11,
+   "label": "L1_E_L",
+   "level": 1,
+   "side": "L",
+   "kind": "entry",
+   "xyz": [
+    24.755,
+    99.696,
+    69.972
+   ],
+   "tre_mm": 1.399,
+   "r95_mm": 2.969
+  },
+  {
+   "i": 12,
+   "label": "L2_E_R",
+   "level": 2,
+   "side": "R",
+   "kind": "entry",
+   "xyz": [
+    -24.963,
+    91.208,
+    39.296
+   ],
+   "tre_mm": 1.573,
+   "r95_mm": 3.218
+  },
+  {
+   "i": 13,
+   "label": "L2_E_L",
+   "level": 2,
+   "side": "L",
+   "kind": "entry",
+   "xyz": [
+    25.816,
+    91.966,
+    37.861
+   ],
+   "tre_mm": 1.191,
+   "r95_mm": 2.683
+  },
+  {
+   "i": 14,
+   "label": "L3_E_L",
+   "level": 3,
+   "side": "L",
+   "kind": "entry",
+   "xyz": [
+    24.491,
+    82.144,
+    2.591
+   ],
+   "tre_mm": 1.056,
+   "r95_mm": 2.508
+  },
+  {
+   "i": 15,
+   "label": "L3_E_R",
+   "level": 3,
+   "side": "R",
+   "kind": "entry",
+   "xyz": [
+    -26.103,
+    82.988,
+    4.025
+   ],
+   "tre_mm": 1.443,
+   "r95_mm": 3.031
+  },
+  {
+   "i": 16,
+   "label": "L4_E_R",
+   "level": 4,
+   "side": "R",
+   "kind": "entry",
+   "xyz": [
+    -31.316,
+    75.39,
+    -28.941
+   ],
+   "tre_mm": 1.424,
+   "r95_mm": 3.004
+  },
+  {
+   "i": 17,
+   "label": "L4_E_L",
+   "level": 4,
+   "side": "L",
+   "kind": "entry",
+   "xyz": [
+    24.259,
+    73.532,
+    -29.299
+   ],
+   "tre_mm": 1.02,
+   "r95_mm": 2.475
+  },
+  {
+   "i": 18,
+   "label": "L5_E_L",
+   "level": 5,
+   "side": "L",
+   "kind": "entry",
+   "xyz": [
+    29.789,
+    73.701,
+    -58.9
+   ],
+   "tre_mm": 1.0,
+   "r95_mm": 2.475
+  },
+  {
+   "i": 19,
+   "label": "L5_E_R",
+   "level": 5,
+   "side": "R",
+   "kind": "entry",
+   "xyz": [
+    -36.973,
+    83.157,
+    -56.5
+   ],
+   "tre_mm": 1.431,
+   "r95_mm": 3.013
+  }
+ ],
+ "error": {
+  "target": 13,
+  "label": "L2_E_L",
+  "r95_mm": 2.683,
+  "grade": "good"
+ },
+ "jitter": null
+}
