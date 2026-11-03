@@ -118,17 +118,14 @@ def compose_face_block(face_label, face_slots, start_id, marker_size_mm,
         mx = mm(h_mm - half_m)
         my = mm(v_mm - half_m)
 
-        # Generate and paste marker
         marker_img = make_marker(aruco_id, marker_px)
         block.paste(Image.fromarray(marker_img), (mx, my))
 
-        # Small ID label below the marker
         label_x = mm(h_mm - half_m)
         label_y = mm(v_mm + half_m + 0.5)
         draw.text((label_x, label_y), f"ID {aruco_id}",
                   fill=150, font=font_id)
 
-    # Face title at the very top centre
     draw.text((mm(face_size_mm * 0.25), mm(1.5)),
               f"Face {face_label}", fill=100, font=font_title)
 
@@ -147,7 +144,6 @@ def compose_face_blocks_pdf(marker_size_mm, start_id, face_size_mm=79.0):
     font_title = get_font(5.0)
     font_note = get_font(3.0)
 
-    # Title
     draw.text((mm(15), mm(10)),
               "V3 L-bracket face blocks (DICT_6X6_50, 20mm markers)",
               fill=0, font=font_title)
@@ -185,7 +181,6 @@ def compose_face_blocks_pdf(marker_size_mm, start_id, face_size_mm=79.0):
               f"Face B: stick on lateral wall (X = +30)",
               fill=0, font=font_note)
 
-    # 50mm ruler at the bottom
     _draw_ruler(draw, page_h, get_font(2.5), font_note)
 
     return page
@@ -217,7 +212,6 @@ def compose_print_sheet(marker_size_mm, start_id):
     left_margin_mm = (210 - cols * cell_w_mm) / 2
     top_mm = 25.0
 
-    # Title
     draw.text((mm(left_margin_mm), mm(10)),
               "V3 L-bracket ArUco markers (DICT_6X6_50)",
               fill=0, font=font_title)
@@ -229,7 +223,6 @@ def compose_print_sheet(marker_size_mm, start_id):
 
     for face_label, face_slots in [("Face A (caudal wall, Z = -95)", [0, 1, 2, 3]),
                                     ("Face B (lateral wall, X = +30)", [4, 5, 6, 7])]:
-        # Face header
         draw.text((mm(left_margin_mm), mm(y_cursor_mm)),
                   face_label, fill=0, font=font_heading)
         y_cursor_mm += 7.0
@@ -265,7 +258,6 @@ def compose_print_sheet(marker_size_mm, start_id):
             my = mm(y_mm + border_mm)
             page.paste(Image.fromarray(marker_img), (mx, my))
 
-            # Label below marker
             label_y = mm(y_mm + border_mm + marker_size_mm + 2)
             draw.text((mm(x_mm + border_mm), label_y),
                       f"ID {aruco_id}", fill=0, font=font_heading)
@@ -273,11 +265,9 @@ def compose_print_sheet(marker_size_mm, start_id):
                       f"Slot {slot_idx}: {info['position']}",
                       fill=0, font=font_label)
 
-        # Advance past this face's row
         rows_in_face = (len(face_slots) + cols - 1) // cols
         y_cursor_mm += rows_in_face * cell_h_mm + 6.0
 
-    # 50mm ruler near the bottom
     _draw_ruler(draw, page_h, font_small, font_label)
 
     return page
@@ -305,7 +295,6 @@ def _draw_ruler(draw, page_h_px, font_small, font_label):
     ruler_y = page_h_px - mm(40)
     ruler_x = mm(80)  # centered-ish on A4
 
-    # Baseline
     draw.line([(ruler_x, ruler_y), (ruler_x + mm(50), ruler_y)],
               fill=0, width=mm(0.2))
 
@@ -380,7 +369,6 @@ def main():
     face_pdf.save(str(face_path), resolution=DPI)
     print(f"Face blocks PDF: {face_path}")
 
-    # Mapping JSON
     map_path = outdir / "marker_map.json"
     with open(map_path, "w") as f:
         json.dump(mapping, f, indent=2)

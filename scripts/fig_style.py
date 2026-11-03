@@ -11,7 +11,7 @@ Rules the palette follows
 """
 import matplotlib as mpl
 
-# --- core hues --------------------------------------------------------------------------
+# core hues
 NAVY = "#0B3C5D"      # darkest blue: titles, emphasis, P1 dark
 BLUE = "#1B6CA8"      # P1 (bracket), calibrated / main series
 SKY = "#8DBBDD"       # P1 light (drifted focus), random-noise share
@@ -25,12 +25,12 @@ PALE = "#EEF1F4"      # very light background wash
 BLACK = "#000000"
 WHITE = "#FFFFFF"
 
-# --- tracking classes (same everywhere) --------------------------------------------------
+# tracking classes (same everywhere)
 FULL = "#0E8F7E"      # full accuracy / reliable tracking
 PART = "#9ED8CB"      # tracking holds / degraded
 NONE = "#D9DEE3"      # no tracking (also drawn with hatching where it is a region)
 
-# --- prototype and state colours ---------------------------------------------------------
+# prototype and state colours
 P1_CAL, P1_DRIFT = BLUE, SKY
 P2_F50, P2_F35 = TEAL, MINT
 

@@ -60,9 +60,7 @@ SCALE = 4       # zoom factor, gives 0.25px click resolution
 WIN = "ATP-2 measure"
 
 
-# --------------------------------------------------------------------
 # Geometry helpers
-# --------------------------------------------------------------------
 
 def cam_ray(px, K, D, R, t):
     """Ray (origin, unit direction) in phantom frame through pixel px."""
@@ -95,9 +93,7 @@ def max_ray_angle_deg(rays):
     return ang
 
 
-# --------------------------------------------------------------------
 # Click UI
-# --------------------------------------------------------------------
 
 class Clicker:
     def __init__(self):
@@ -223,9 +219,7 @@ def compare_sessions(prev_csv, rows):
           f"session-to-session shift {d.mean():+.2f} mm")
 
 
-# --------------------------------------------------------------------
 # Main
-# --------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser()
@@ -358,7 +352,7 @@ def main():
         print("Nothing measured.")
         return
 
-    # --- per-view CSV ---
+    # per-view CSV
     out2d = f"{args.out}.csv"
     with open(out2d, "w", newline="") as fh:
         wr = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
@@ -368,7 +362,7 @@ def main():
     if args.compare:
         compare_sessions(args.compare, rows)
 
-    # --- triangulated 3D CSV ---
+    # triangulated 3D CSV
     rows3d = []
     for lab, rs in sorted(rays.items()):
         if len(rs) < 2:
@@ -390,7 +384,7 @@ def main():
             wr.writeheader()
             wr.writerows(rows3d)
 
-    # --- summary ---
+    # summary
     e = np.array([r["err_mm"] for r in rows])
     print(f"\n=== In-plane overlay error ({len(rows)} measurements) ===")
     print(f"mean {e.mean():.2f} mm | median {np.median(e):.2f} | "

@@ -67,9 +67,7 @@ def save(fig, out, name):
     print(f"  wrote {name}.pdf / .png")
 
 
-# ---------------------------------------------------------------------------------------
 # 1. Calibration depth check
-# ---------------------------------------------------------------------------------------
 RULER_V1 = [(25, 24.9), (35, 34.7), (45, 44.9)]            # (true cm, recovered depth cm), just after calibration
 RULER_RECHECK = [(35, 34.57), (45, 45.28)]                 # final focus state
 
@@ -103,9 +101,7 @@ def fig_calib(out, a):
     save(fig, out, "fig_calib_depth")
 
 
-# ---------------------------------------------------------------------------------------
 # 2. ATP-2 overlay error by level
-# ---------------------------------------------------------------------------------------
 def load_err(paths):
     rows = []
     for p in ([paths] if isinstance(paths, str) else paths):
@@ -154,9 +150,7 @@ def fig_atp2(out, a):
     save(fig, out, "fig_atp2_by_level")
 
 
-# ---------------------------------------------------------------------------------------
 # 3. Design-sweep pose grids (spherical frame)
-# ---------------------------------------------------------------------------------------
 def fig_grids(out, a):
     cmap = LinearSegmentedColormap.from_list("elev", ["#CFE6F1", FS.SKY, FS.BLUE, FS.NAVY])
     fig = plt.figure(figsize=(W, 3.05))
@@ -188,9 +182,7 @@ def fig_grids(out, a):
     save(fig, out, "fig_sweep_grids")
 
 
-# ---------------------------------------------------------------------------------------
 # helpers for the envelope and P2 range figures
-# ---------------------------------------------------------------------------------------
 def load_p2_sweeps(path):
     rows = [r for r in read(path) if r["focus"] == "f50"]
     def pick(sweep):
@@ -262,7 +254,7 @@ def fig_envelope(out, a):
     fig = plt.figure(figsize=(W, 5.0))
     gs = fig.add_gridspec(2, 3, width_ratios=[1.25, 1.05, 1.25], hspace=0.38, wspace=0.25)
 
-    # ---------------- P1 (values from tab:results:envelope) ----------------
+    # P1 (values from tab:results:envelope)
     ax = fig.add_subplot(gs[0, 0])
     range_panel(ax, (0, 140), full=(55, 100), part=(33, 124), none_from=124, unit="Distance (cm)", cf=B_FULL, cp=B_PART, lab=B_FULL)
     ax.set_title("(a) Distance", fontsize=11.5); axd1 = ax
@@ -276,7 +268,7 @@ def fig_envelope(out, a):
     ring(ax, 30, 55, 0.7, 2.9, B_FULL)
     ax.set_title("(b) Azimuth", fontsize=11.5, pad=26, loc="center")
 
-    # ---------------- P2 (classes from measured PnP success, f50) ----------------
+    # P2 (classes from measured PnP success, f50)
     d = sorted(pick("distance"), key=lambda r: flt(r["dist_mm"]))
     dx = [flt(r["dist_mm"]) / 10 for r in d]; dp = [flt(r["pnp_pct"]) for r in d]
     full_hi = edge(max(x for x, p in zip(dx, dp) if p >= 95), min(x for x, p in zip(dx, dp) if p < 95 and x > 50))
@@ -321,9 +313,7 @@ def fig_envelope(out, a):
     save(fig, out, "fig_envelope_p1p2")
 
 
-# ---------------------------------------------------------------------------------------
 # 3D working-envelope volumes (spherical-shell blocks, as in a dS diagram)
-# ---------------------------------------------------------------------------------------
 def _xyz(r, el, az):
     el, az = np.radians(el), np.radians(az)
     return -r * np.cos(el) * np.sin(az), -r * np.cos(el) * np.cos(az), r * np.sin(el)

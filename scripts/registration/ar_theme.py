@@ -31,9 +31,7 @@ STATUS_STALE   = (100, 95, 85)     # RGB #555F64  grey
 TRE_GOOD_MM = 1.0
 TRE_BAD_MM  = 2.0   # Gertzbein-Robbins safe zone
 
-# ====================================================================
 # Operational envelope (measured, ATP-3, V3 L-bracket)
-# ====================================================================
 # Distance is camera to phantom origin (base plate top centre), in mm.
 # Azimuth: 0 = caudal (Face A), 90 = patient left (Face B).
 #
@@ -55,7 +53,7 @@ ENV_REDUCED_DIST_MM = (330.0, 1240.0)
 ENV_REDUCED_ELEV    = (0.0, 52.0)
 ENV_REDUCED_AZ      = (325.0, 120.0)   # wraps through 0
 
-# Legacy names (kept so older imports still work)
+# Aliases for older imports
 ENVELOPE_ELEV = ENV_FULL_ELEV
 ENVELOPE_AZ   = ENV_FULL_AZ
 

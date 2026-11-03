@@ -70,7 +70,6 @@ class Tracker:
     def is_v3(self):
         return self.selector.board.is_v3
     
-    # ---- commands from the UI ----
     def confirm(self):
         if self.state == "VERIFYING":
             self.state = "NAVIGATING"
@@ -80,7 +79,6 @@ class Tracker:
         self.state = "SEARCHING"
         self.prev_rvec = self.prev_tvec = None
 
-    # ---- per-frame ----
     def process(self, frame, now):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
@@ -154,7 +152,6 @@ class Tracker:
                         self.state = "VERIFYING"
                         self.verify_start_time = now
 
-        # --- Stale / lost ---
         if not pnp_ok:
             if (self.prev_rvec is not None and
                     (now - self.last_good_time) < STALE_HOLD_SEC):
@@ -173,7 +170,6 @@ class Tracker:
                 self.prev_rvec = self.prev_tvec = None
                 visible_ids = []
 
-        # --- Verify countdown ---
         if self.state == "VERIFYING":
             if (now - self.verify_start_time) >= VERIFY_COUNTDOWN_SEC:
                 self.state = "NAVIGATING"

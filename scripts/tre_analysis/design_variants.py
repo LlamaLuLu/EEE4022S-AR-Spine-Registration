@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 
-# ---------- Bracket geometry ----------
+# Bracket geometry
 
 BRACKET = {
     "face_A_z_mm":     -103.7,
@@ -46,7 +46,7 @@ def _face_B(h_mm, v_mm):
     return [+70.1, 80.0 - v_mm, -23.7 - h_mm]
 
 
-# ---------- V0: 4 coplanar markers on base plate ----------
+# V0: 4 coplanar markers on base plate
 
 V0_MARKERS = np.array([
     [   0.0,   0.5,  +75.0],
@@ -55,19 +55,19 @@ V0_MARKERS = np.array([
     [ -40.0,   0.5,    0.0],
 ])
 
-# ---------- V1: L-bracket, 6 markers spread ----------
+# V1: L-bracket, 6 markers spread
 V1_MARKERS = np.array([
     _face_A(15, 15), _face_A(65, 15), _face_A(40, 65),
     _face_B(15, 15), _face_B(65, 15), _face_B(40, 65),
 ])
 
-# ---------- V2: same bracket, clustered ----------
+# V2: same bracket, clustered
 V2_MARKERS = np.array([
     _face_A(27, 27), _face_A(53, 27), _face_A(40, 53),
     _face_B(27, 27), _face_B(53, 27), _face_B(40, 53),
 ])
 
-# ---------- V3: same bracket, 8 markers ----------
+# V3: same bracket, 8 markers
 V3_MARKERS = np.array([
     _face_A(15, 15), _face_A(65, 15), _face_A(15, 65), _face_A(65, 65),
     _face_B(15, 15), _face_B(65, 15), _face_B(15, 65), _face_B(65, 65),
@@ -81,7 +81,7 @@ VARIANTS = {
 }
 
 
-# ---------- Pedicle targets ----------
+# Pedicle targets
 
 _LEVELS_Z = {"L1": +65.0, "L2": +32.5, "L3": 0.0, "L4": -32.5, "L5": -65.0}
 _PEDICLE_HEIGHT_MM = 50.0
@@ -98,7 +98,7 @@ PLACEHOLDER_PEDICLE_LABELS = (
 )
 
 
-# ---------- Pedicle loader ----------
+# Pedicle loader
 
 LPS_TO_PHANTOM_TRANSLATION_MM = np.array([-9.1, +177.7, +583.2])
 

@@ -26,12 +26,10 @@ Domes (V4/V5 family): see dome_oriented() and DOME_CONFIGS below.
 import numpy as np
 
 
-# ---------- Orientation matrices (LPS convention) ----------
+# Orientation matrices (LPS convention)
 
 # Marker lying flat, read from above with cranial (+Z) at the top of the image.
 # Seen from above, the image's right-hand side is patient RIGHT (-X), so local X = -X.
-# (The previous version used +X here, which made this a mirrored frame, det = -1.
-#  V0 results are unaffected because the simulator is self-consistent.)
 R_FLAT_UP = np.array([
     [-1, 0, 0],    # local X -> -X
     [ 0, 0, 1],    # local Y -> +Z (cranial = up in the image)
@@ -56,7 +54,7 @@ for _R in (R_FLAT_UP, R_FACE_A, R_FACE_B):
     assert np.isclose(np.linalg.det(_R), 1.0)
 
 
-# ---------- Face-local helpers ----------
+# Face-local helpers
 
 def _fA(h, v):
     """Face A: h=0 at junction edge (X~70), h increases toward far (-X)."""
@@ -68,7 +66,7 @@ def _fB(h, v):
     return np.array([70.1, 80.0 - v, -23.7 - h])
 
 
-# ---------- Dome generator ----------
+# Dome generator
 
 def dome_oriented(centre, ring_r=45.0, n_ring=6, tilt_deg=15.0,
                   ring_h=0.0, top_h=25.0, arc_deg=360.0, arc_mid_deg=0.0,
@@ -143,7 +141,7 @@ def build_dome(name, tilt_deg=None, **overrides):
     return out
 
 
-# ---------- V0: 4 coplanar markers on base plate ----------
+# V0: 4 coplanar markers on base plate
 
 V0_ORIENTED = [
     (np.array([   0.0,   0.5,  +75.0]), R_FLAT_UP),
@@ -152,19 +150,19 @@ V0_ORIENTED = [
     (np.array([ -40.0,   0.5,    0.0]), R_FLAT_UP),
 ]
 
-# ---------- V1: L-bracket, 6 markers spread ----------
+# V1: L-bracket, 6 markers spread
 V1_ORIENTED = [
     (_fA(15, 15), R_FACE_A), (_fA(65, 15), R_FACE_A), (_fA(40, 65), R_FACE_A),
     (_fB(15, 15), R_FACE_B), (_fB(65, 15), R_FACE_B), (_fB(40, 65), R_FACE_B),
 ]
 
-# ---------- V2: same bracket, clustered ----------
+# V2: same bracket, clustered
 V2_ORIENTED = [
     (_fA(27, 27), R_FACE_A), (_fA(53, 27), R_FACE_A), (_fA(40, 53), R_FACE_A),
     (_fB(27, 27), R_FACE_B), (_fB(53, 27), R_FACE_B), (_fB(40, 53), R_FACE_B),
 ]
 
-# ---------- V3: same bracket, 8 markers ----------
+# V3: same bracket, 8 markers
 V3_ORIENTED = [
     (_fA(15, 15), R_FACE_A),   # slot 0: near junction, top
     (_fA(65, 15), R_FACE_A),   # slot 1: far, top

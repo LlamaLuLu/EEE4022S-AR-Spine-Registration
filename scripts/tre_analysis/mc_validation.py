@@ -74,9 +74,7 @@ SOLVER_FLAG = cv2.SOLVEPNP_ITERATIVE
 FLE_FITZ_MM = 0.8             # Fitzpatrick input used in the pipeline
 
 
-# ---------------------------------------------------------------------------
 # Visibility model
-# ---------------------------------------------------------------------------
 @dataclass
 class Vis:
     max_angle_deg: float = 76.0     # outward normal vs line of sight: the 50% point of the fitted soft model
@@ -117,9 +115,7 @@ def visible_ids(oriented, pose, K, dist, vis, size_mm=MARKER_MM, occluders=()):
     return out
 
 
-# ---------------------------------------------------------------------------
 # Hand stand-in occluders and coplanarity
-# ---------------------------------------------------------------------------
 def _seg_seg_dist(p0, p1, q0, q1):
     """Shortest distance between segments p0-p1 and q0-q1."""
     d1, d2, r = p1 - p0, q1 - q0, p0 - q0
@@ -189,9 +185,7 @@ def noncoplanar(oriented, ids, size_mm=MARKER_MM, tol_mm=2.0):
     return float(sv[-1] / np.sqrt(len(pts))) > tol_mm
 
 
-# ---------------------------------------------------------------------------
 # Soft visibility: per-marker detection probability
-# ---------------------------------------------------------------------------
 @dataclass
 class SoftVis:
     """Logistic detection probability per marker. The 50% points are the equivalent hard limits."""
@@ -247,9 +241,7 @@ def p_at_least(p, k):
     return float(dp[k:].sum())
 
 
-# ---------------------------------------------------------------------------
 # Monte Carlo with overlay error
-# ---------------------------------------------------------------------------
 def simulate(oriented, ids, targets, pose, K, dist, sigma_px, n_trials=400, seed=0, size_mm=MARKER_MM):
     rvec, tvec = pose
     corners3d = np.vstack([corners_from_oriented_marker(oriented[i][0], oriented[i][1], size_mm)
@@ -356,9 +348,7 @@ def fnum(v):
         return np.nan
 
 
-# ---------------------------------------------------------------------------
 # fit: visibility model vs ATP-3
-# ---------------------------------------------------------------------------
 def load_atp3(paths, elev_drop=()):
     """Rows of (sweep, dist, elev, az, markers_mean, pnp%). Fills the pose of dead-zone steps.
     elev_drop: ATP-3.3 step numbers to leave out (default 9, the movement at the end of the run)."""
@@ -546,9 +536,7 @@ def cmd_fit(a):
     return sv
 
 
-# ---------------------------------------------------------------------------
 # design / tilt: variant comparison
-# ---------------------------------------------------------------------------
 def pose_grid(a):
     return [(e, az) for e in a.elevs for az in np.arange(0, 360, a.az_step)]
 
@@ -723,9 +711,7 @@ def cmd_tilt(a):
     print(f"Saved {out}")
 
 
-# ---------------------------------------------------------------------------
 # atp4: marker-set study
-# ---------------------------------------------------------------------------
 ATP4_SETS = {   # step -> (sequence, covered-markers set after that step)
     18: ("A/B", set()),
     4: ("A", {1}), 6: ("A", {1, 6}), 8: ("A", {1, 6, 3}), 10: ("A", {1, 6, 3, 4}),
@@ -771,9 +757,7 @@ def cmd_atp4(a):
           "actually tracked, so it sits above 'Fitz mean' (nominal set) wherever fewer markers than 'sim vis' were really detected.")
 
 
-# ---------------------------------------------------------------------------
 # atp2: error budget
-# ---------------------------------------------------------------------------
 def budget(a, K, dist, targets, labels, poses_glob, measured_csv, live_rms):
     """Per-measurement (level, measured error, MC static, MC live) overlay errors, in mm."""
     lab_idx = {l: i for i, l in enumerate(labels)}
@@ -839,9 +823,7 @@ def cmd_atp2(a):
           f"Poses with fewer than {a.gate_eff} markers are skipped (the live pipeline would not track them).")
 
 
-# ---------------------------------------------------------------------------
 # predict: planned ATP-3 poses for any array, with the V3-fitted visibility model
-# ---------------------------------------------------------------------------
 def cmd_predict(a):
     K, dist = load_cal(a.calibration)
     sv = soft_from_args(a)
@@ -872,9 +854,7 @@ def cmd_predict(a):
     print(f"Saved {out}")
 
 
-# ---------------------------------------------------------------------------
 # figs: figures for the Results chapter
-# ---------------------------------------------------------------------------
 def cmd_figs(a):
     import matplotlib
     matplotlib.use("Agg")
@@ -887,7 +867,7 @@ def cmd_figs(a):
     sv = soft_from_args(a)
     outdir = Path(a.figdir); outdir.mkdir(parents=True, exist_ok=True)
 
-    # --- tracking: model vs measurement -------------------------------------------------
+    # tracking: model vs measurement
     rows = load_atp3([a.atp31, a.atp32, a.atp33], a.elev_drop)
     pt = lambda d, e, az: p_at_least(marker_probs(V3_ORIENTED, make_camera_pose(d, e, az), K, dist, sv), GATE) * 100
     fig, axs = plt.subplots(1, 3, figsize=(6.3, 2.1), sharey=True)
@@ -907,7 +887,7 @@ def cmd_figs(a):
     fig.savefig(outdir / "fig_mc_tracking_validation.pdf", bbox_inches="tight"); fig.savefig(outdir / "fig_mc_tracking_validation.png", bbox_inches="tight")
     plt.close(fig); print(f"wrote {outdir / 'fig_mc_tracking_validation.pdf'}")
 
-    # --- error budget by level -----------------------------------------------------------
+    # error budget by level
     targets, labels = load_pedicles_from_json(a.targets)
     sets = [("Calibrated focus", a.poses, a.measured, a.live_rms), ("Drifted focus", a.poses_early, a.measured_early, a.live_rms_early)]
     fig, axs = plt.subplots(1, 2, figsize=(6.3, 2.8), sharey=True)
@@ -939,9 +919,7 @@ def cmd_figs(a):
     plt.close(fig); print(f"wrote {outdir / 'fig_error_budget.pdf'}")
 
 
-# ---------------------------------------------------------------------------
 # fle: noise-path check
-# ---------------------------------------------------------------------------
 def cmd_fle(a):
     K, dist = load_cal(a.calibration)
     s = MARKER_MM / 2

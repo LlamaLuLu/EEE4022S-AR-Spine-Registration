@@ -36,7 +36,6 @@ TEAL = (195, 195, 60)
 WHITE = (235, 235, 235)
 
 
-# ============================================================================ 1. original API (unchanged)
 def load_stl_for_wireframe(stl_path):
     """
     Load an STL file and return geometry for wireframe rendering.
@@ -106,7 +105,6 @@ def _dedup(verts_raw, normals_raw, n_tri):
     return unique.astype(np.float32), edge_list
 
 
-# ============================================================================ 2. per-vertebra meshes
 @dataclass
 class VertebraMesh:
     level: int                  # 1 to 5
@@ -221,7 +219,6 @@ def level_from_label(label):
     return (int(m.group(1)), m.group(2)) if m else (None, None)
 
 
-# ============================================================================ 3. projection and drawing
 def outline_segments(mesh, rvec, tvec, K, D, mode="outline"):
     """
     Project one mesh and return line segments as an int32 array (S, 2, 2) in pixels.

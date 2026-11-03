@@ -1,3 +1,7 @@
+"""
+ATP-2: fit a rigid, scaled and translation-only transform to the measured 3D overlay
+error, to see how much of it is a systematic offset.
+"""
 import csv, sys, numpy as np
 sys.path[:0] = ["scripts/registration", "scripts/tre_analysis"]
 from ar_targets import load_targets

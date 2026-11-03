@@ -34,7 +34,7 @@ from design_variants import (
 from design_variants_oriented import VARIANTS_ORIENTED
 
 
-# ---------- Phantom cylinder for occlusion ----------
+# Phantom cylinder for occlusion
 # The phantom (vertebrae + processes) is approximated as a cylinder aligned
 # with the spine axis (Z). Cross-section is a circle in the XY plane. This is
 # tighter than an axis-aligned box: transverse processes stick out laterally
@@ -45,7 +45,7 @@ PHANTOM_CYLINDER_Z_MIN = -95.0                          # caudal end (near L5)
 PHANTOM_CYLINDER_Z_MAX = +85.0                          # cranial end (near L1)
 
 
-# ---------- Geometry helpers ----------
+# Geometry helpers
 
 def make_camera_pose(distance_mm: float = 350.0,
                      elevation_deg: float = 30.0,
@@ -82,7 +82,7 @@ def corners_from_oriented_marker(centroid_mm: np.ndarray,
     return centroid_mm + local_offsets @ R_marker_to_phantom.T
 
 
-# ---------- Visibility filters ----------
+# Visibility filters
 
 def ray_intersects_cylinder(origin: np.ndarray, direction: np.ndarray,
                              center_xy: np.ndarray, radius: float,
@@ -183,7 +183,7 @@ def filter_visible_markers(oriented_markers: list,
     ]
 
 
-# ---------- One MC trial ----------
+# One MC trial
 
 def single_trial(marker_corners_3d, target_positions_3d,
                  rvec_true, tvec_true, K, dist,
@@ -207,7 +207,7 @@ def single_trial(marker_corners_3d, target_positions_3d,
     return np.sqrt(((target_positions_3d - targets_phantom_recovered) ** 2).sum(axis=1))
 
 
-# ---------- MC across variants ----------
+# MC across variants
 
 def run_monte_carlo(oriented_markers, target_positions_mm, K, dist,
                     marker_size_mm, pixel_noise_sigma, n_trials,

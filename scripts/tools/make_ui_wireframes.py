@@ -28,7 +28,6 @@ HALO = [pe.withStroke(linewidth=4.5, foreground=(0, 0, 0, 0.55))]
 plt.rcParams.update({"font.family": "DejaVu Sans", "pdf.fonttype": 42})
 
 
-# ----------------------------------------------------------------------------- primitives
 def new_canvas():
     fig = plt.figure(figsize=(W / 100, (H + CAP) / 100), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
@@ -67,7 +66,6 @@ def keycap(ax, x, y, label, size=11):
     return w
 
 
-# ----------------------------------------------------------------------------- scene
 LEVELS = ["L1", "L2", "L3", "L4", "L5"]
 
 
@@ -123,7 +121,6 @@ def draw_scene(ax, ghost_except=None, ghost_alpha=0.28):
         ax.add_patch(plt.Rectangle((x, y), 34, 34, fc="#111", ec="none", zorder=4, angle=-8))
 
 
-# ----------------------------------------------------------------------------- shared UI parts
 def state_pill(ax, name, color, x=None):
     w = 62 + 17 * len(name)
     x = W / 2 - w / 2 if x is None else x
@@ -188,7 +185,6 @@ def caption(ax, text_lines):
         tx(ax, 22, H + 22 + 26 * k, line, size=12.5, color="#1B2430", z=31)
 
 
-# ----------------------------------------------------------------------------- glyphs
 def ring(ax, x, y, r, c, lw=2.5, z=12, ls="-", alpha=1.0, halo=True):
     p = Circle((x, y), r, fc="none", ec=c, lw=lw, ls=ls, zorder=z, alpha=alpha)
     if halo:
@@ -212,7 +208,6 @@ def trajectory(ax, e, u, inward=150, outward=300, depth_ticks=True):
     u = np.array(u, float); u /= np.linalg.norm(u)
     n = np.array([-u[1], u[0]])
     tip = np.array([ex, ey]) + u * inward
-    # inward, solid
     ln = ax.plot([ex, tip[0]], [ey, tip[1]], color="#FFFFFF", lw=4.0, solid_capstyle="round", zorder=12)[0]
     ln.set_path_effects(HALO)
     ah = FancyArrowPatch((tip - u * 18)[:2], tip[:2], arrowstyle="-|>", mutation_scale=30, color="#FFFFFF", lw=0, zorder=13)
@@ -244,7 +239,6 @@ def action_label(ax, x, y, text, sub=None):
         tx(ax, x + w / 2, y + 34, sub, size=11.5, color=TEXT, ha="center", halo=True, z=16)
 
 
-# ----------------------------------------------------------------------------- states
 def w1_searching():
     fig, ax = new_canvas(); draw_scene(ax)
     state_pill(ax, "SEARCHING", GREY)
@@ -273,7 +267,6 @@ def w2_verifying():
     trust_badge(ax, "good", "Registration found. Check it before trusting it.")
     rr(ax, W / 2 - 330, 110, 660, 62, r=18, alpha=0.9)
     tx(ax, W / 2, 141, "Does the outline sit on the bone?", size=21, weight="bold", ha="center")
-    # countdown ring
     cx, cy = W / 2 - 230, H - 170
     rr(ax, cx - 250, cy - 70, 500, 140, r=24, alpha=0.9)
     ax.add_patch(Circle((cx - 170, cy), 40, fc="none", ec="#2B3640", lw=7, zorder=8))

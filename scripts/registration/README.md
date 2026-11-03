@@ -12,7 +12,6 @@ scripts/registration/
   live_ar_overlay_qt.py    Primary entry point (Qt window, frame loop, keys)
   live_ar_overlay.py       cv2 fallback entry point
   live_pose_overlay.py     V0 single-marker debug viewer
-  generate_bracket_markers.py   marker stickers, print sheet, marker_map.json
 
   Core (no Qt, reusable by other front ends)
   ar_board.py       board geometry, ArUco ID to 3D corners, multi-marker solvePnP
@@ -86,7 +85,7 @@ V3 bracket is used.
 ### 1. Generate bracket markers
 
 ```
-python scripts/registration/generate_bracket_markers.py \
+python scripts/markers/generate_bracket_markers.py \
     --outdir data/bracket_markers
 ```
 

@@ -12,7 +12,6 @@ import json
 from pathlib import Path
 import nibabel as nib
 
-# --- Configuration ---
 DATA_ROOT = Path("data/verse20/derivatives")
 SHORTLIST = [
     "sub-verse504",
@@ -40,7 +39,6 @@ def analyse_case(case_id: str) -> dict:
     case_dir = DATA_ROOT / case_id
     result = {"case_id": case_id}
 
-    # --- Centroids ---
     ctd_file = find_file(case_dir, "_ctd.json")
     if ctd_file is None:
         result["error"] = "no centroids JSON found"
@@ -58,7 +56,6 @@ def analyse_case(case_id: str) -> dict:
     result["l6_flag"] = L6_LABEL in labels_present
     result["t13_flag"] = T13_LABEL in labels_present
 
-    # --- Segmentation NIfTI header ---
     seg_file = find_file(case_dir, "_msk.nii.gz")
     if seg_file is None:
         result["error"] = "no segmentation NIfTI found"
